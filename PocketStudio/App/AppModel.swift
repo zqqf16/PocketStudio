@@ -1,0 +1,798 @@
+// AppModel.swift — 连接编排与全局状态（对应原项目 web.py ConnectionManager + main.py 流程）
+//
+// 连接步骤（与原项目 Web UI 一致）：
+//  0 蓝牙扫描 → 1 配对 → 2 等待相机 Wi-Fi 开启(~20s) → 3 加入 Wi-Fi → 4 检查相机可达
+//  → 5 UDP 握手 → 6 启动视频 → 7 已连接
+// 蓝牙在加入 Wi-Fi 期间保持连接（原项目注释：否则相机可能关闭 AP），成功后断开。
+
+import Foundation
+import AppKit
+import CoreMedia
+
+extension Notification.Name {
+    static let modelChanged = Notification.Name("PocketStudio.modelChanged")
+    static let logAppended = Notification.Name("PocketStudio.logAppended")
+}
+
+enum StepStatus { case pending, active, done, failed, skipped }
+
+struct ConnectStep {
+    let title: String
+    let symbol: String
+    var status: StepStatus = .pending
+    var detail: String = ""
+}
+
+enum ConnectionPhase: Equatable {
+    case idle, connecting, connected, failed(String)
+}
+
+/// 在 CameraLink 的后台 queue 上创建，主线程展示 → nonisolated + Sendable
+nonisolated struct DUMLLogEntry: Sendable {
+    let time: Date
+    let direction: DUMLDirection
+    let packet: DUMLPacket
+    var route: String { "\(DUMLDevice.name(packet.senderType))(\(packet.senderID))→\(DUMLDevice.name(packet.receiverType))(\(packet.receiverID))" }
+    var command: String { String(format: "%@:0x%02x", DUMLCmdSet.name(packet.cmdSet), packet.cmdID) }
+    /// 高频推送（心跳/状态/ACK 窗口等），可在调试页过滤
+    var isHighFrequency: Bool {
+        let p = packet
+        switch (p.cmdSet, p.cmdID) {
+        case (0, 0x4F), (2, 0x8E), (2, 0x80), (2, 0xDC), (2, 0xA0), (2, 0x61), (4, 0x01), (4, 0x05), (13, 0x02), (0, 0x81), (0, 0x82), (0, 0x88): return true
+        default: return false
+        }
+    }
+}
+
+/// 隔离：@MainActor（所有 UI 状态）。后台回调（CameraLink / VideoPipeline 的 @Sendable 闭包）
+/// 一律通过 Task { @MainActor in … } 回到主线程；DUML 日志经线程安全的 DUMLBuffer 批量转交。
+@MainActor
+final class AppModel {
+    static let shared = AppModel()
+    let settings = AppSettings.shared
+    let ble = BLEManager()
+    let wifi = WiFiManager()
+    let video = VideoPipeline()
+    private(set) var link: CameraLink?
+
+    private(set) var phase: ConnectionPhase = .idle
+    private(set) var steps: [ConnectStep] = AppModel.freshSteps()
+    private(set) var snapshot = LinkSnapshot()
+    private(set) var videoStats = VideoPipeline.Stats(fps: 0, kbps: 0, frames: 0, bytes: 0, width: 0, height: 0)
+    private(set) var bleBattery: Int?
+    private(set) var textLog: [String] = []
+    private(set) var dumlLog: [DUMLLogEntry] = []
+    private(set) var isLocalRecording = false
+    private(set) var lastSavedFile: URL?
+    private(set) var lastRecordingFile: URL?
+    var logPaused = false
+
+    /// 手动加入 Wi-Fi 引导状态（程序化加入失败时显示）
+    private(set) var manualWiFiReason: String?
+    private var manualWiFiCheckRequested = false
+
+    private var connectTask: Task<Void, Never>?
+    private let pending = DUMLBuffer()
+    private var changePosted = false
+    private var statsTimer: Timer?
+    private var modeIndex = 1 // 原项目从「录像」开始循环
+    /// 模式选择（乐观更新 + 状态核对）
+    private(set) var captureMode = CaptureModeState()
+    var displayedMode: CameraMode? { captureMode.displayed }
+
+    private func applySnapshot(_ s: LinkSnapshot) {
+        snapshot = s
+        if s.camera.hasCameraStatus { captureMode.report(s.camera.mode, now: ProcessInfo.processInfo.systemUptime) }
+        changed()
+    }
+
+    /// 统一快门：动作随模式与录制状态变化
+    func shutter() {
+        guard isConnected, link != nil else { return }
+        let cam = snapshot.camera
+        switch Shutter.action(mode: cam.hasCameraStatus ? cam.mode : displayedMode, recording: cam.recording) {
+        case .takePhoto: takePhoto()
+        case .startRecording, .stopRecording: toggleCameraRecording()
+        }
+    }
+
+    static func freshSteps() -> [ConnectStep] {
+        [ConnectStep(title: "扫描蓝牙设备", symbol: "dot.radiowaves.left.and.right"),
+         ConnectStep(title: "蓝牙配对", symbol: "link"),
+         ConnectStep(title: "等待相机 Wi-Fi 开启", symbol: "hourglass"),
+         ConnectStep(title: "加入相机 Wi-Fi", symbol: "wifi"),
+         ConnectStep(title: "检查相机是否可达", symbol: "network"),
+         ConnectStep(title: "UDP 握手", symbol: "arrow.left.arrow.right"),
+         ConnectStep(title: "启动视频流", symbol: "video"),
+         ConnectStep(title: "已连接", symbol: "checkmark.seal")]
+    }
+
+    private init() {
+        ble.onLog = { [weak self] s in Task { @MainActor in self?.log(s) } }
+        ble.onBattery = { [weak self] b in Task { @MainActor in self?.bleBattery = b; self?.changed() } }
+        video.onError = { [weak self] e in Task { @MainActor in self?.log("视频：\(e)") } }
+        video.onNeedKeyframe = { [weak self] reason in
+            Task { @MainActor in self?.requestKeyframe(reason) }
+        }
+        statsTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.periodic() }
+        }
+    }
+
+    var isBusy: Bool { phase == .connecting }
+    var isConnected: Bool { phase == .connected }
+
+    // MARK: Change notification（合并为每个 runloop 最多一次）
+
+    func changed() {
+        guard !changePosted else { return }
+        changePosted = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                self?.changePosted = false
+                NotificationCenter.default.post(name: .modelChanged, object: self)
+            }
+        }
+    }
+
+    func log(_ s: String) {
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+        textLog.append("\(f.string(from: Date()))  \(s)")
+        if textLog.count > 1000 { textLog.removeFirst(textLog.count - 1000) }
+        NotificationCenter.default.post(name: .logAppended, object: self)
+    }
+
+    private func periodic() {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let last = lastPeriodicAt { mainLagMax = max(mainLagMax, (now - last - 0.25) * 1000) }
+        lastPeriodicAt = now
+        if isConnected { videoStats = video.stats(); captureMode.tick(now: now); runWatchdog(now: now); changed() }
+        let batch = pending.drain()
+        if !batch.isEmpty, !logPaused {
+            dumlLog += batch
+            if dumlLog.count > 3000 { dumlLog.removeFirst(dumlLog.count - 3000) }
+            NotificationCenter.default.post(name: .logAppended, object: self)
+        }
+    }
+
+    func clearLogs() { dumlLog = []; textLog = []; NotificationCenter.default.post(name: .logAppended, object: self) }
+
+    private func setStep(_ i: Int, _ st: StepStatus, _ detail: String = "") {
+        guard steps.indices.contains(i) else { return }
+        if st == .active { for j in 0 ..< i where steps[j].status == .active { steps[j].status = .done } }
+        steps[i].status = st
+        if !detail.isEmpty || st != .active { steps[i].detail = detail }
+        if !detail.isEmpty { log("[\(steps[i].title)] \(detail)") }
+        changed()
+    }
+
+    // MARK: Connect
+
+    func connect() {
+        guard !isBusy, !isConnected else { return }
+        let ssid = settings.ssid
+        if ssid.isEmpty && !settings.skipWiFi {
+            log("尚未填写相机 Wi-Fi 名称，将使用手动加入引导")
+        }
+        steps = Self.freshSteps()
+        phase = .connecting
+        manualWiFiReason = nil
+        changed()
+        connectTask = Task { [weak self] in await self?.runConnect() }
+    }
+
+    func cancelConnect() {
+        connectTask?.cancel()
+        connectTask = nil
+        teardown()
+        phase = .idle
+        manualWiFiReason = nil
+        log("已取消连接")
+        changed()
+    }
+
+    private func runConnect() async {
+        let s = settings
+        do {
+            if !s.skipBLE {
+                do {
+                    try await bleActivateAndWiFi(retries: 3)
+                } catch is CancellationError { throw CancellationError() }
+                catch {
+                    // 与原项目 main.py 一致：蓝牙失败后尝试仅 Wi-Fi
+                    guard !s.skipWiFi else { throw error }
+                    log("蓝牙激活失败：\(error.localizedDescription)。尝试仅加入 Wi-Fi（相机 Wi-Fi 可能已开启）…")
+                    try await joinWiFiStep()
+                    try await reachabilityStep()
+                }
+            } else {
+                for i in 0 ... 2 { setStep(i, .skipped, "已跳过") }
+                if !s.skipWiFi {
+                    try await joinWiFiStep()
+                    try await reachabilityStep()
+                } else {
+                    setStep(3, .skipped, "已跳过"); setStep(4, .skipped, "已跳过")
+                }
+            }
+            ble.disconnect()
+            try Task.checkCancellation()
+            try await udpStep()
+            setStep(6, .active, "发送 Mimo 启动序列（DM368 注册 + 视频心跳）…")
+            try await Task.sleep(nanoseconds: 700_000_000)
+            setStep(6, .done)
+            setStep(7, .done, "连接成功！")
+            phase = .connected
+            log("=== 已就绪：P 拍照，O 录制，方向键 / WASD 控制云台 ===")
+            changed()
+        } catch is CancellationError {
+            // cancelConnect 已处理
+        } catch {
+            let msg = error.localizedDescription
+            if let i = steps.firstIndex(where: { $0.status == .active }) { setStep(i, .failed, msg) }
+            log("连接失败：\(msg)")
+            teardown()
+            phase = .failed(msg)
+            manualWiFiReason = nil
+            changed()
+        }
+    }
+
+    private func bleActivateAndWiFi(retries: Int) async throws {
+        var lastError: Error = BLEError.notFound
+        for attempt in 1 ... retries {
+            do {
+                if attempt > 1 { log("蓝牙重试 \(attempt)/\(retries)…") }
+                try await bleActivateOnce()
+                return
+            } catch is CancellationError { ble.disconnect(); throw CancellationError() }
+            catch let e as WiFiJoinError { ble.disconnect(); throw e } // Wi-Fi 问题不重试蓝牙
+            catch {
+                lastError = error
+                ble.disconnect()
+                log("蓝牙第 \(attempt)/\(retries) 次失败：\(error.localizedDescription)")
+                if attempt < retries { try await Task.sleep(nanoseconds: 3_000_000_000) }
+            }
+        }
+        throw lastError
+    }
+
+    private func bleActivateOnce() async throws {
+        setStep(0, .active, "正在通过蓝牙寻找 DJI Pocket 3…")
+        var devices = try await ble.scan(timeout: settings.bleTimeout)
+        let pockets = devices.filter { $0.model == DJIBLE.pocket3Model }
+        if !pockets.isEmpty { devices = pockets }
+        else if devices.isEmpty { throw BLEError.notFound }
+        else { log("未发现 Pocket 3，但找到：\(devices.map { "\($0.name)(\($0.model))" }.joined(separator: ", "))，尝试第一台") }
+        let dev = devices[0]
+        setStep(0, .done, "找到 \(dev.name)（\(dev.model)）")
+
+        setStep(1, .active, "正在与 \(dev.name) 配对…首次配对请在相机屏幕上点「允许」")
+        try await ble.connect(dev)
+        let already = try await ble.pair()
+        setStep(1, .done, already ? "相机报告：已配对" : "配对请求已发送")
+
+        if !settings.skipWiFi, wifi.isOnCameraNetwork(ssid: settings.ssid, cameraIP: settings.cameraIP) {
+            setStep(2, .skipped, "已在相机网络上，无需等待")
+        } else {
+            let total = Int(settings.apWaitSeconds)
+            for left in stride(from: total, to: 0, by: -1) {
+                setStep(2, .active, "等待相机 Wi-Fi 热点开启… 剩余 \(left) 秒（蓝牙保持连接）")
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            setStep(2, .done, "")
+        }
+        if !settings.skipWiFi {
+            try await joinWiFiStep()
+            try await reachabilityStep()
+        } else {
+            setStep(3, .skipped, "已跳过"); setStep(4, .skipped, "已跳过")
+        }
+        log("Wi-Fi 已连接，断开蓝牙")
+    }
+
+    private func joinWiFiStep() async throws {
+        let ssid = settings.ssid, pw = settings.password, ip = settings.cameraIP
+        if wifi.isOnCameraNetwork(ssid: ssid, cameraIP: ip) {
+            setStep(3, .done, "已在相机网络上\(wifi.currentSSID.map { "（\($0)）" } ?? "")"); return
+        }
+        setStep(3, .active, "正在加入 \(ssid.isEmpty ? "相机 Wi-Fi" : ssid)…")
+        var reason: String
+        if ssid.isEmpty {
+            reason = "尚未在设置中填写相机 Wi-Fi 名称。"
+        } else {
+            do {
+                try await wifi.join(ssid: ssid, password: pw)
+                if await wifi.waitForCameraNetwork(ssid: ssid, cameraIP: ip, timeout: 30) {
+                    setStep(3, .done, "已加入 \(ssid)"); return
+                }
+                reason = "已请求加入，但 30 秒内未获得相机网络地址。"
+            } catch {
+                reason = error.localizedDescription
+                if !wifi.locationAuthorized { reason += " 提示：授予「定位服务」权限后，App 才能按名称找到相机 Wi-Fi。" }
+            }
+        }
+        // 降级：手动加入引导
+        manualWiFiReason = reason
+        setStep(3, .active, "需要手动加入 Wi-Fi：\(reason)")
+        log("请按「连接」页面提示手动加入相机 Wi-Fi（最多等待 3 分钟，连上后自动继续）")
+        changed()
+        let ok = await wifi.waitForCameraNetwork(ssid: ssid, cameraIP: ip, timeout: 180)
+        manualWiFiReason = nil
+        try Task.checkCancellation()
+        guard ok else { throw WiFiJoinError.associate("等待手动加入超时。") }
+        setStep(3, .done, "已检测到相机网络")
+    }
+
+    /// 「我已连接」按钮：立即重新检测
+    func manualWiFiRecheck() {
+        if wifi.isOnCameraNetwork(ssid: settings.ssid, cameraIP: settings.cameraIP) { log("已检测到相机网络，继续…") }
+        else { log("尚未检测到 192.168.2.x 地址。请确认 Mac 菜单栏 Wi-Fi 已选中相机热点。") }
+    }
+
+    private func reachabilityStep() async throws {
+        setStep(4, .active, "检查相机 \(settings.cameraIP)…")
+        let ok = await wifi.waitForCameraNetwork(ssid: settings.ssid, cameraIP: settings.cameraIP, timeout: 10)
+        if !ok { throw WiFiJoinError.associate("相机不可达：未获得 192.168.2.x 地址") }
+        setStep(4, .done, wifi.localCameraNetworkAddress.map { "本机地址 \($0)" } ?? "")
+    }
+
+    private func udpStep() async throws {
+        setStep(5, .active, "与相机 \(settings.cameraIP):9004 握手…")
+        do {
+            let l = try await openLink()
+            setStep(5, .done, String(format: "握手成功，相机 session 0x%04X", l.currentSnapshot().sessionID))
+        } catch {
+            throw NSError(domain: "PocketStudio", code: 1, userInfo: [NSLocalizedDescriptionKey:
+                "\(error.localizedDescription)。常见原因：① 电脑或手机上的 DJI Mimo 正占用相机，请彻底退出；② 未允许「本地网络」权限；③ 未连上相机 Wi-Fi；④ 可在设置中切换到「BSD Socket 兼容模式」再试。"])
+        }
+    }
+
+    /// 新建传输（新 socket / 新本地端口）+ 新 CameraLink（新 session、所有序号与窗口游标清零）并握手。
+    /// 首次连接与「刷新视频」/ 看门狗第 3 阶段共用。
+    @discardableResult
+    private func openLink() async throws -> CameraLink {
+        if settings.tcpPoke {
+            if await poke.ensure(host: settings.cameraIP) { log("TCP 7001 SetPairingPIN 已就绪（保持连接）") }
+            else { log("TCP 7001 未就绪（不影响继续，部分固件不需要）") }
+        }
+        let transport: DatagramTransport = settings.transport == .bsd ? BSDDatagramTransport() : NWDatagramTransport(wifiOnly: settings.wifiInterfaceOnly)
+        let l = CameraLink(host: settings.cameraIP, transport: transport)
+        Self.configure(l, settings)
+        let pipeline = video
+        pipeline.reset()
+        l.onVideo = { b in pipeline.ingest(b) }
+        l.onSnapshot = { [weak self] s in Task { @MainActor in self?.applySnapshot(s) } }
+        l.onError = { [weak self] e in Task { @MainActor in self?.log(e) } }
+        l.onReply = { [weak self] p in Task { @MainActor in self?.handleReply(p) } }
+        let buf = pending
+        l.onDUML = { p, d in buf.append(DUMLLogEntry(time: Date(), direction: d, packet: p)) }
+        link = l
+        let result: Result<Void, LinkError> = await withCheckedContinuation { c in l.connect(timeout: 10) { c.resume(returning: $0) } }
+        switch result {
+        case .success:
+            LocalNetworkPermission.shared.markGrantedFromTraffic()
+            linkConnectedAt = ProcessInfo.processInfo.systemUptime
+            lastReplyCount = 0; lastReplyCountAt = linkConnectedAt; replyRate = 0
+            lastRxPackets = 0; lastVideoPackets = 0
+            monitor.reset()
+            return l
+        case let .failure(e):
+            if link === l { link = nil }
+            throw NSError(domain: "PocketStudio", code: 1, userInfo: [NSLocalizedDescriptionKey: e.description])
+        }
+    }
+
+    // MARK: 视频看门狗 / 恢复
+
+    private var monitor = VideoHealthMonitor()
+    private let poke = TCPPoke()
+    private var linkConnectedAt = 0.0
+    private var lastDiagAt = 0.0
+    private var lastPeriodicAt: Double?
+    private var mainLagMax = 0.0
+    private var lastReplyCount = 0
+    private var lastReplyCountAt = 0.0
+    private var replyRate = 0.0
+    private var lastRxPackets = 0, lastVideoPackets = 0
+    /// 画面恢复提示（nil = 正常）；LiveViewController 显示在画面上
+    private(set) var videoRecoveryMessage: String?
+    /// 渲染器状态（LiveViewController 提供；诊断用）
+    var rendererStatus: () -> String = { "—" }
+
+    private func requestKeyframe(_ reason: String) {
+        link?.requestKeyframe { [weak self] sent in
+            if sent { Task { @MainActor in self?.log("请求关键帧（0x09/0xA8）：\(reason)") } }
+        }
+    }
+
+    private func runWatchdog(now: Double) {
+        guard !recovering, link != nil else { return }
+        let snap = snapshot, h = video.health()
+        if now - lastReplyCountAt >= 2 {
+            replyRate = max(0, Double(snap.repliesRx - lastReplyCount) / max(0.001, now - lastReplyCountAt))
+            lastReplyCount = snap.repliesRx; lastReplyCountAt = now
+        }
+        handlePlayback(now: now)
+        let busy = snap.camera.inPlayback || snap.camera.capturing
+        let action = monitor.evaluate(VideoHealthInput(now: now, connectedAt: linkConnectedAt, lastVideoPacket: snap.lastVideoAt,
+                                                       lastDecoded: h.lastDecodedAt, lastTelemetry: snap.lastTelemetryAt,
+                                                       lastReply: snap.lastReliableAt, cameraBusy: busy))
+        if action != .none { log(diagnosticLine(now: now, tag: "看门狗")) }
+        switch action {
+        case .none: break
+        case .recovered:
+            videoRecoveryMessage = nil; log("画面已恢复")
+        case .linkLost:
+            log("与相机的连接中断（遥测也停止 ≥4s）→ 自动重连")
+            startRecovery(reason: "遥测中断")
+        case .resetDecoder:
+            videoRecoveryMessage = "画面中断，正在恢复…（重建解码器）"
+            log("画面中断：视频包仍在到达但无法解码 → 只重建解码器（不动链路）")
+            video.resetDecoder(reason: "看门狗")
+        case .waitCameraBusy:
+            videoRecoveryMessage = snap.camera.inPlayback ? "相机进入回放，正在退出回放…" : "相机正在处理照片，请稍候…"
+            log("画面暂停：相机忙（回放=\(snap.camera.inPlayback) 拍照处理=\(snap.camera.capturing)）→ 不重建链路，等待相机")
+        case .reRegister:
+            videoRecoveryMessage = "画面中断，正在恢复…（重新注册）"
+            log("画面中断：相机停止发送视频（遥测照常）→ 重新注册 + 请求关键帧")
+            link?.reRegister(); requestKeyframe("看门狗")
+        case .commandStall:
+            videoRecoveryMessage = "相机停止响应命令，正在重新连接…"
+            log("相机命令通道已 6s 无应答（遥测仍在）——此状态在日志中从未自愈、8–10s 后视频必停 → 立即蓝牙唤醒重连")
+            startRecovery(reason: "命令通道无应答")
+        case .rebuildLink:
+            log("画面仍中断且相机不再应答命令 → 自动重连（退避）")
+            startRecovery(reason: "看门狗")
+        }
+        if now - lastDiagAt >= (monitor.isStalled ? 2 : 10) {
+            lastDiagAt = now
+            log(diagnosticLine(now: now, tag: "诊断"))
+            mainLagMax = 0
+        }
+    }
+
+    /// 拍照后相机会自己进入回放（13:35:04 日志：0x80 标志 bit30 置位 + 10Hz Camera:0x82 推送，实时画面停止）。
+    /// 我们没主动进入回放 → 每 2s 发一次「退出回放」0x02/0x0C 01 01 00 00，直到标志清除。
+    private var lastExitPlaybackAt = 0.0
+    private var exitPlaybackCount = 0
+    private func handlePlayback(now: Double) {
+        guard settings.autoExitPlayback, snapshot.camera.inPlayback else { exitPlaybackCount = 0; return }
+        guard now - lastExitPlaybackAt >= 2 else { return }
+        lastExitPlaybackAt = now; exitPlaybackCount += 1
+        link?.sendCamera(CameraCommand.exitPlayback)
+        if exitPlaybackCount <= 3 { log("相机处于回放（拍照后自动预览）→ 发送退出回放（0x02/0x0C 01 01 00 00）#\(exitPlaybackCount)") }
+    }
+
+    /// 一行诊断：下一份用户日志里据此定位问题
+    func diagnosticLine(now: Double = ProcessInfo.processInfo.systemUptime, tag: String = "诊断") -> String {
+        let s = snapshot, h = video.health(), v = videoStats
+        func age(_ t: Double?) -> String { t.map { String(format: "%.1fs", now - $0) } ?? "从未" }
+        let rx = s.stats.rxPackets - lastRxPackets, vp = s.stats.videoFrames - lastVideoPackets
+        lastRxPackets = s.stats.rxPackets; lastVideoPackets = s.stats.videoFrames
+        let types = s.stats.rxTypeCounts.sorted { $0.key < $1.key }.map { "t\($0.key)=\($0.value)" }.joined(separator: ",")
+        return String(format: "[%@] 视频片段 %ld/s · AU %ld/s · 解码 %ld fps · %ld kbps · 最近：视频包 %@ / 解码 %@ / 遥测 %@ / 应答 %@ · 相机应答 %.1f/s · ACK v=%04X%@ r=%04X%@ x=%04X%@ · 握手 %ld 次 · 解码错误 %ld%@ · 解码器重建 %ld · 渲染器 %@ 冲刷 %ld · 等关键帧 %@(丢 %ld) · 关键帧请求 %ld · GOP %ld · 录制排队 %ld · 待解码 %ld · 主线程最大延迟 %.0fms · 收包 %ld（视频 %ld）累计[%@] · 云台 %@",
+                      tag, h.rxChunksPerSec, h.ausPerSec, v.fps, v.kbps,
+                      age(s.lastVideoAt), age(h.lastDecodedAt), age(s.lastTelemetryAt), age(s.lastReliableAt),
+                      replyRate,
+                      s.ackVideo, s.ackVideoSeen ? "" : "?", s.ackReliable, s.ackReliableSeen ? "" : "?", s.ackExtra, s.ackExtraSeen ? "" : "(base)",
+                      s.handshakeCount, h.decodeErrors, h.lastDecodeError.map { "(\($0))" } ?? "", h.decoderResets,
+                      rendererStatus(), h.rendererFlushes, h.waitingKeyframe ? "是" : "否", h.droppedWhileWaiting,
+                      h.keyframeRequests, h.gopFrames, h.recPending, h.pendingIngest, mainLagMax, rx, vp, types,
+                      s.gimbalReady ? "就绪" : "准备中")
+    }
+
+    // MARK: 自动重连（退避）
+    //
+    // 13:33–13:35 日志：两次「重建链路」都在关掉旧 socket 300ms 后立刻握手 → 10s 握手超时（13:34:11、13:35:21），
+    // 失败后 link=nil，看门狗还拿空快照误报「画面已恢复」、算出负的应答速率；
+    // 而用户手动重连（蓝牙配对 → 同一 Wi-Fi → 握手）一次成功（13:34:30）。
+    // 现在：等待旧会话释放（≥1.5s）→ TCP 7001 戳 + 新 socket；还不行就走完整重连（蓝牙唤醒 + 必要时重新加入 Wi-Fi），按退避重试。
+
+    private(set) var recovering = false
+    private var policy = ReconnectPolicy()
+    private var recoveryTask: Task<Void, Never>?
+
+    /// 兼容旧调用名
+    func rebuildLink(reason: String) { startRecovery(reason: reason) }
+
+    func startRecovery(reason: String, immediate: Bool = false) {
+        guard isConnected, !recovering else { return }
+        recovering = true
+        policy.reset()
+        let wasRecording = isLocalRecording
+        if wasRecording { toggleLocalRecording(); log("提示：本地录制已在重连前自动保存，如需继续请重新开始录制") }
+        recoveryTask = Task { [weak self] in await self?.runRecovery(reason: reason, immediate: immediate) }
+    }
+
+    private func dropLink() {
+        link?.stop(); link = nil
+        poke.close()
+        video.reset()
+        snapshot = LinkSnapshot()
+        changed()
+    }
+
+    private func runRecovery(reason: String, immediate: Bool) async {
+        defer { recovering = false; recoveryTask = nil; changed() }
+        dropLink()
+        var first = true
+        while let (delay, level) = policy.next() {
+            let n = policy.failures + 1
+            let wait = (first && immediate) ? 1.5 : delay   // 至少 1.5s：让相机释放旧会话
+            first = false
+            videoRecoveryMessage = "连接中断，正在重连（第 \(n) 次\(level == .fullReconnect ? "，蓝牙唤醒" : "")）…"
+            log(String(format: "自动重连 #%ld（%@）：%.1fs 后%@", n, reason, wait, level == .fullReconnect ? "完整重连（蓝牙唤醒 → Wi-Fi → UDP）" : "重建 UDP（TCP 7001 + 新 socket）"))
+            changed()
+            do {
+                try await Task.sleep(nanoseconds: UInt64(wait * 1e9))
+                guard isConnected else { return }
+                if level == .fullReconnect { try await rewake() }
+                let l = try await openLink()
+                ble.disconnect()
+                policy.reset(); videoRecoveryMessage = nil
+                log(String(format: "自动重连成功（#%ld），相机 session 0x%04X", n, l.currentSnapshot().sessionID))
+                return
+            } catch is CancellationError {
+                return
+            } catch {
+                ble.disconnect()
+                log("自动重连 #\(n) 失败：\(error.localizedDescription)")
+                policy.recordFailure()
+            }
+        }
+        log("自动重连多次失败，已停止。请检查相机是否开机、Wi-Fi 是否仍连着相机，然后点「连接」重试。")
+        teardown()
+        phase = .failed("自动重连失败")
+        changed()
+    }
+
+    /// 蓝牙重新唤醒（与手动连接相同的配对，相机会因此接受新会话）+ 必要时重新加入 Wi-Fi（不弹手动引导）
+    private func rewake() async throws {
+        if !settings.skipBLE {
+            do {
+                var devs = try await ble.scan(timeout: min(settings.bleTimeout, 8))
+                let p = devs.filter { $0.model == DJIBLE.pocket3Model }
+                if !p.isEmpty { devs = p }
+                guard let d = devs.first else { throw BLEError.notFound }
+                try await ble.connect(d)
+                _ = try await ble.pair()
+                log("蓝牙重新唤醒：\(d.name) 已配对")
+            } catch is CancellationError { throw CancellationError() }
+            catch { log("蓝牙唤醒失败（继续尝试 Wi-Fi）：\(error.localizedDescription)") }
+        }
+        guard !settings.skipWiFi else { return }
+        if !wifi.isOnCameraNetwork(ssid: settings.ssid, cameraIP: settings.cameraIP) {
+            log("Mac 已不在相机 Wi-Fi 上（相机热点可能断开）→ 重新加入")
+            if !settings.ssid.isEmpty { try? await wifi.join(ssid: settings.ssid, password: settings.password) }
+            guard await wifi.waitForCameraNetwork(ssid: settings.ssid, cameraIP: settings.cameraIP, timeout: 25) else {
+                throw WiFiJoinError.associate("未能重新加入相机 Wi-Fi")
+            }
+        }
+    }
+
+    private func teardown() {
+        recoveryTask?.cancel(); recoveryTask = nil; recovering = false
+        monitor.reset(); videoRecoveryMessage = nil
+        link?.stop(); link = nil
+        poke.close()
+        if isLocalRecording { toggleLocalRecording() }
+        video.reset()
+        ble.disconnect()
+    }
+
+    func disconnect() {
+        connectTask?.cancel(); connectTask = nil
+        teardown()
+        phase = .idle
+        steps = Self.freshSteps()
+        snapshot = LinkSnapshot()
+        log("已断开")
+        changed()
+    }
+
+    // MARK: Camera commands
+
+    func takePhoto() {
+        guard let link else { return }
+        let mode = snapshot.camera.mode
+        if let mode, !mode.isStill {
+            log("拍照：相机当前为「\(mode.displayName)」模式，快门可能被拒绝（d9）。请先切到「拍照」模式。")
+        }
+        link.takePhoto()
+        log("拍照（0x02/0x01 [01]）")
+    }
+    func toggleCameraRecording() {
+        guard let link else { return }
+        link.toggleRecording { [weak self] start, mode in
+            Task { @MainActor in
+                let how = mode?.usesShutterForRecording == true ? "0x02/0x01" : "0x02/0x02"
+                self?.log(start ? "开始相机录制（\(how) [01]）" : "停止相机录制（\(how) [00]）")
+            }
+        }
+    }
+    func startCameraRecording() { link?.startRecording() }
+    func stopCameraRecording() { link?.stopRecording() }
+    func setMode(_ m: CameraMode) {
+        guard !snapshot.camera.recording else { log("录制中不能切换模式，请先停止录制"); return }
+        // 界面立即切换；命令防抖 400ms 只发最后一次（13:51 日志：7s 内连发 6 次切换后相机停止应答）
+        captureMode.request(m, now: ProcessInfo.processInfo.systemUptime)
+        changed()
+        if let i = CameraMode.switchable.firstIndex(where: { $0 == m }) { modeIndex = i }
+        modeSendTask?.cancel()
+        modeSendTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard let self, !Task.isCancelled else { return }
+            if self.snapshot.camera.hasCameraStatus, self.snapshot.camera.mode == m { self.log("模式已是「\(m.displayName)」，不重复发送"); return }
+            self.link?.setMode(m)
+            self.log(String(format: "切换模式：%@（0x02/0xE1 [%02X]）", m.displayName, m.rawValue))
+        }
+    }
+    private var modeSendTask: Task<Void, Never>?
+
+    /// 相机 / 云台对 request 的应答（flags 0x80/0xC0）
+    private func handleReply(_ p: DUMLPacket) {
+        let name: String
+        switch (p.cmdSet, p.cmdID) {
+        case (2, 0x01): name = "快门"
+        case (2, 0x02): name = "录像"
+        case (2, 0xE1): name = "切换模式"
+        case (4, 0x4C): name = "云台模式/回中"
+        case (4, 0x50): name = "云台参数"
+        default: return   // 心跳等应答不打日志
+        }
+        let ok = p.payload.first == 0
+        if p.cmdSet == 2, p.cmdID == 0xE1 { captureMode.ack(success: ok); changed() }
+        log("相机应答 · \(name)：\(CameraCommand.describeReply(cmdID: p.cmdID, payload: p.payload))\(ok ? "" : "（\(p.payload.prefix(4).map { String(format: "%02x", $0) }.joined(separator: " "))）")")
+    }
+    func cycleMode() {
+        modeIndex = (modeIndex + 1) % CameraMode.switchable.count
+        setMode(CameraMode.switchable[modeIndex])
+    }
+    /// 「刷新视频」：彻底重置。实机日志：原地重新握手（11:41:20、11:41:49）后相机仍零应答、画面不恢复，
+    /// 而断开重连（新 socket）立即恢复 → 刷新改为重建整条 UDP 链路。
+    func refreshVideo() {
+        guard !recovering else { log("正在自动重连，请稍候"); return }
+        log("刷新视频：释放旧会话 1.5s 后重建 UDP 链路（失败则蓝牙唤醒重连），并重置解码器 / 渲染器 / 窗口游标")
+        log(diagnosticLine(tag: "刷新前"))
+        monitor.reset()
+        startRecovery(reason: "手动刷新", immediate: true)
+    }
+    func sendRaw(cmdSet: UInt8, cmdID: UInt8, payload: Bytes, receiverType: UInt8, receiverID: UInt8, cmdType: UInt8) {
+        guard let link else { log("未连接，无法发送"); return }
+        link.sendRaw(cmdSet: cmdSet, cmdID: cmdID, payload: payload, receiverType: receiverType, receiverID: receiverID, cmdType: cmdType)
+        log(String(format: "原始命令：set=0x%02x id=0x%02x payload=%@ → %@(%d)", cmdSet, cmdID, payload.hexString(), DUMLDevice.name(receiverType), receiverID))
+    }
+
+    // MARK: Gimbal
+
+    /// 归一化速度（-1…1）；pitch 正值 = 向上
+    /// 轴顺序与反转在协议层（GimbalSpeedController）处理，这里只传 UI 语义：yaw 右正、pitch 上正
+    func setGimbal(yaw: Double, pitch: Double) { link?.setGimbalSpeed(yaw: yaw, pitch: pitch) }
+    func stopGimbal() { link?.stopGimbal() }
+    func nudgeGimbal(yaw: Double, pitch: Double, duration: Double = 0.3) {
+        link?.nudge(yaw: yaw, pitch: pitch, duration: duration)
+    }
+    func recenterGimbal() { link?.gimbalRecenter(); log("云台回中（0x04/0x4C FE 08）") }
+    func flipGimbal() { link?.gimbalFlip(); log("云台前后翻转（0x04/0x4C FE 09）") }
+    func setGimbalMode(_ m: GimbalMode) {
+        link?.setGimbalMode(m)
+        log(String(format: "云台模式：%@（0x04/0x4C %02X 08）", m.displayName, m.rawValue))
+    }
+    func setGimbalSpeedSetting(_ v: GimbalSpeedSetting) {
+        link?.setGimbalSpeedSetting(v); log("云台转速：\(v.displayName)（0x04/0x50）")
+    }
+    func applyLinkSettings() {
+        guard let link else { return }
+        Self.configure(link, settings)
+    }
+    private static func configure(_ link: CameraLink, _ s: AppSettings) {
+        link.legacyAttitudeLayout = s.swapPitchYaw
+        link.setGimbalStreaming(false)   // 不再提供 30Hz 持续发送（会挤爆相机命令通道，见 AGENTS §5f）
+        link.setLegacyFraming(s.legacyFraming)
+        link.configureGimbal(order: s.gimbalAxisOrder, invertYaw: s.invertYaw, invertPitch: s.invertPitch)
+    }
+
+    // MARK: Local recording / snapshot
+
+    private func newFileURL(ext: String) throws -> URL {
+        let folder = settings.recordingFolder
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyyMMdd_HHmmss"
+        return folder.appendingPathComponent("PocketStudio_\(f.string(from: Date())).\(ext)")
+    }
+
+    func toggleLocalRecording() {
+        if isLocalRecording {
+            isLocalRecording = false
+            video.stopRecording { [weak self] url in
+                Task { @MainActor in
+                    if let url { self?.lastSavedFile = url; self?.lastRecordingFile = url; self?.log("录制已保存：\(url.path)（点「在访达中显示」查看）") }
+                    else { self?.log("录制未生成文件：录制期间没有收到关键帧。请录制更久一点，或先点「刷新视频」后再录。") }
+                    self?.changed()
+                }
+            }
+        } else {
+            guard isConnected else { log("请先连接相机"); return }
+            do {
+                let fmt = settings.recordingFormat
+                let url = try newFileURL(ext: fmt == .mp4 ? "mp4" : "h264")
+                try video.startRecording(to: url, format: fmt)
+                isLocalRecording = true
+                log("开始录制到 \(url.path)")
+            } catch { log("无法开始录制：\(error.localizedDescription)") }
+        }
+        changed()
+    }
+
+    var localRecordingInfo: (Date, Int)? { isLocalRecording ? video.recordingInfo : nil }
+
+    func saveSnapshot() {
+        do {
+            let url = try newFileURL(ext: "png")
+            if video.saveSnapshot(to: url) { lastSavedFile = url; log("截图已保存：\(url.path)") }
+            else { log("暂无画面可截图") }
+        } catch { log("截图失败：\(error.localizedDescription)") }
+        changed()
+    }
+
+    /// 在访达中显示最近保存的文件（录制优先于截图）；文件不存在则打开文件夹
+    func revealLastFile() {
+        let fm = FileManager.default
+        if let u = lastRecordingFile ?? lastSavedFile, fm.fileExists(atPath: u.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([u])
+            log("在访达中显示：\(u.lastPathComponent)")
+        } else {
+            let folder = settings.recordingFolder
+            try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            if !NSWorkspace.shared.open(folder) { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: folder.path) }
+            log("打开文件夹：\(folder.path)")
+        }
+    }
+    /// 用默认播放器（QuickTime）打开最近的录制
+    func openLastRecording() {
+        guard let u = lastRecordingFile, FileManager.default.fileExists(atPath: u.path) else { revealLastFile(); return }
+        NSWorkspace.shared.open(u)
+    }
+
+    // MARK: BLE 直播（实验，原项目 ble.py 中的 RTMP 能力）
+
+    func runRTMPFlow(routerSSID: String, routerPassword: String, url: String, resolution: DJIBLE.RTMPResolution, fps: Int, bitrate: Int) {
+        guard !isBusy else { log("正在连接中，稍后再试"); return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                var devs = try await ble.scan(timeout: settings.bleTimeout)
+                devs = devs.filter { $0.model == DJIBLE.pocket3Model }.isEmpty ? devs : devs.filter { $0.model == DJIBLE.pocket3Model }
+                guard let d = devs.first else { throw BLEError.notFound }
+                try await ble.connect(d)
+                try await ble.pair()
+                await ble.stopStreaming()
+                try await ble.prepareLivestream()
+                try await ble.setupWiFi(ssid: routerSSID, password: routerPassword)
+                try await ble.startRTMP(url: url, resolution: resolution, fps: fps, bitrateKbps: bitrate)
+                log("RTMP 推流命令已发送。蓝牙保持连接，可点击「停止推流」。")
+            } catch {
+                log("RTMP 流程失败：\(error.localizedDescription)")
+                ble.disconnect()
+            }
+        }
+    }
+
+    func stopRTMP() {
+        Task { [weak self] in
+            guard let self else { return }
+            if ble.isConnected { await ble.stopStreaming() } else { log("蓝牙未连接") }
+            ble.disconnect()
+        }
+    }
+}
+
+/// 跨线程收集 DUML 日志，主线程批量取出
+nonisolated final class DUMLBuffer: @unchecked Sendable {
+    private var items: [DUMLLogEntry] = []
+    private let lock = NSLock()
+    func append(_ e: DUMLLogEntry) {
+        lock.lock(); items.append(e); if items.count > 5000 { items.removeFirst(1000) }; lock.unlock()
+    }
+    func drain() -> [DUMLLogEntry] { lock.lock(); defer { lock.unlock() }; let x = items; items = []; return x }
+}

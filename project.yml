@@ -1,0 +1,71 @@
+# XcodeGen 工程描述。生成 Xcode 工程：  brew install xcodegen && xcodegen generate
+name: PocketStudio
+options:
+  bundleIdPrefix: com.pocketstudio
+  deploymentTarget:
+    macOS: "26.0"
+  developmentLanguage: zh-Hans
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    # 与 Xcode 26 新工程默认值一致：Swift 6 语言模式 + 完整并发检查 + 默认 MainActor 隔离 + Approachable Concurrency。
+    # 代码中所有类型都显式声明了隔离（UI = @MainActor，协议/传输/视频 = nonisolated），因此切换这些开关也能编译。
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: "YES"
+    SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT: "YES"
+    SWIFT_UPCOMING_FEATURE_INFER_ISOLATED_CONFORMANCES: "YES"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  PocketStudio:
+    type: application
+    platform: macOS
+    sources:
+      - path: PocketStudio
+        excludes:
+          - "Resources/Info.plist"
+          - "Resources/PocketStudio.entitlements"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pocketstudio.app
+        PRODUCT_NAME: PocketStudio
+        PRODUCT_MODULE_NAME: PocketStudio
+        INFOPLIST_FILE: PocketStudio/Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: PocketStudio/Resources/PocketStudio.entitlements
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        DEAD_CODE_STRIPPING: YES
+  PocketStudioTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: PocketStudioTests
+    dependencies:
+      - target: PocketStudio
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pocketstudio.app.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PocketStudio.app/Contents/MacOS/PocketStudio"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        CODE_SIGN_IDENTITY: "-"
+schemes:
+  PocketStudio:
+    build:
+      targets:
+        PocketStudio: all
+        PocketStudioTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - PocketStudioTests

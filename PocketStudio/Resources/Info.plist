@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>PocketStudio</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.photography</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 zqqf16. MIT License. 教育与研究用途，与 DJI 无关。</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>PocketStudio 需要使用蓝牙来发现并唤醒你的 DJI Osmo Pocket 3，让相机开启 Wi-Fi 热点。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>PocketStudio 需要访问本地网络，才能与相机（192.168.2.1）通信并接收实时画面。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_pocketstudio._tcp</string>
+		<string>_pocketstudio._udp</string>
+	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>macOS 要求 App 读取 Wi-Fi 名称时取得定位授权。PocketStudio 仅用它来找到并自动加入相机的 Wi-Fi 热点，不会记录或上传你的位置。</string>
+	<key>NSLocationUsageDescription</key>
+	<string>macOS 要求 App 读取 Wi-Fi 名称时取得定位授权。PocketStudio 仅用它来找到并自动加入相机的 Wi-Fi 热点，不会记录或上传你的位置。</string>
+</dict>
+</plist>

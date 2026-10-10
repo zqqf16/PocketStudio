@@ -1,0 +1,641 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		17A70E87EB339D01E37893A7 /* CameraProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B4E535F58ACA5334EBED7D6 /* CameraProtocol.swift */; };
+		19E3C6559A38F2A25C1235B3 /* GimbalControlTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F932ADC7C29ABF0B738A4C2 /* GimbalControlTests.swift */; };
+		1C189F9AB00C0998F55EB9EE /* OnboardingWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69B58AB6D29B6532A62C2150 /* OnboardingWindowController.swift */; };
+		1E1FEDE6D95087EF2052A8D2 /* CoreProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DBF5C4C2F9978DB02329C25 /* CoreProtocolTests.swift */; };
+		2D600C0C30ABABDA040EBC10 /* NWDatagramTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F303E03F2E5ADAEAE41294BE /* NWDatagramTransport.swift */; };
+		2F32F8433BE658565A526DC8 /* ByteIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6742C1B15CFD42DAF656307 /* ByteIO.swift */; };
+		3709D07282A8C4C1AA6C9898 /* WiFiManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EACB7E245E7EE1137DE94401 /* WiFiManager.swift */; };
+		3D9197DC851B4720034963CC /* CameraCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DE3D895DAF6A3D38CFA6C3F /* CameraCommandTests.swift */; };
+		3DB9FB3854D12B343F071BE1 /* H264AnnexB.swift in Sources */ = {isa = PBXBuildFile; fileRef = 824C2BD53D182525E8BD329A /* H264AnnexB.swift */; };
+		49F6E89048CDDD8B840CE764 /* LocalNetworkPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = C59BE6F0DCE93556AC349232 /* LocalNetworkPermission.swift */; };
+		51E4062487774F9E26F7724E /* H264Decoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28E2C1B0E63207CDA02925A2 /* H264Decoder.swift */; };
+		540340E2FE72CBCF67893BBE /* LiveViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF4BB8BD4DFBF3F2E71D7CE2 /* LiveViewController.swift */; };
+		5F4A50A4F510E0C0FB3FE0F8 /* DebugViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C99E9C25E112D34567AA19A6 /* DebugViewController.swift */; };
+		690221E285CFA3735C043D5B /* VideoPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 300C8A2E98DEC7B36F91930B /* VideoPipeline.swift */; };
+		6B0CE62DA6EFBC5A1C80EB7D /* UDPFrame.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3045B596FEF04EF2011511D6 /* UDPFrame.swift */; };
+		6D3E79035140ED9E147BBFAC /* CRC.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC06519F8E473B05347849D1 /* CRC.swift */; };
+		6E1B062EA8B92D050DA959CD /* TCPPoke.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92DF3ED0B0F9053EA2210DCE /* TCPPoke.swift */; };
+		7545DEACBC958971E9CD8B14 /* SettingsWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C0B7C4BAF5100F990D038FC /* SettingsWindowController.swift */; };
+		793D2F9A0A477C64F54429B7 /* DJISessionCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12EB27A5C28ECEDEC1DE234F /* DJISessionCore.swift */; };
+		7AFF1464BFA8013DB932FA9D /* DUML.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DEDAD161BF947A7AF963BE9 /* DUML.swift */; };
+		7D323FFE728AA0D2B8494A09 /* CaptureControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92ADC1A36E72D8ADC0202F08 /* CaptureControl.swift */; };
+		8433D8381B42C2AE2587E5A3 /* DJIBLEMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B950018E9EB78FD3430CF8D /* DJIBLEMessage.swift */; };
+		8CEBA6F590F496825ADE7074 /* ShutterButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AFB692E719065B6C5B6F5D4 /* ShutterButton.swift */; };
+		9361039A897E4028F108138C /* GimbalProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AB2C08191014C7479306735 /* GimbalProtocol.swift */; };
+		94162E57CE0A61CA2C46688B /* StatusViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E430E4EAB614BB491C6DB14 /* StatusViewController.swift */; };
+		9B83E4607964A27E1D1D4648 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 885D101506209061A3225D54 /* AppSettings.swift */; };
+		A51073608A8A671B6B2640E5 /* HelpViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A3ADD7A2C1453268CB6C9DC /* HelpViewController.swift */; };
+		AE280733FAD5AB13C8A76A78 /* BLEManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9597AB6F7AEB3431085BFD1 /* BLEManager.swift */; };
+		AF0FA0C706432F2B5DE02833 /* GimbalSpeedController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFFBB2BB8B82B2F1FCE95A72 /* GimbalSpeedController.swift */; };
+		B323220BEEB7E83A3CCF5FD9 /* UIKitHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D4539686D54731EC7062172 /* UIKitHelpers.swift */; };
+		B3ABD7429B52B626A9D28D9E /* VideoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 862A746892FE394A566BC4BF /* VideoView.swift */; };
+		B8B0757AF215F5B14AAB6EDE /* CameraLinkLoopbackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37617ABEC0C8F8122996FDE8 /* CameraLinkLoopbackTests.swift */; };
+		B95F60EAF191B0FFFED22033 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D0A4A89E86BDBAD04F5F00C /* AppDelegate.swift */; };
+		BA32CA6635A166A3A5223345 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14694BAA71797A3412C08975 /* main.swift */; };
+		BEC235533C1B9345D5EC1952 /* ConnectViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7078BB4EDA332C646152570D /* ConnectViewController.swift */; };
+		C43A23E661A675A5A0F2C84F /* JoystickView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1615C625FA6183E55817EB9 /* JoystickView.swift */; };
+		C611BA871E0B3F555C4C26AF /* DatagramTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12D9B7E4BA85345395FC8200 /* DatagramTransport.swift */; };
+		CB8D310C201A94425198AB86 /* CameraLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AE2CC218682780D9DB6F9AF /* CameraLink.swift */; };
+		D9AAE3CBE9B99EAE5AE1BD81 /* VideoHealthMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CDF6DC40C2C94A9EABEE388 /* VideoHealthMonitor.swift */; };
+		E3FA8D4E4F049CA9FAC8EDC6 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A56CA96E6F1AC8A4F96DD44 /* AppModel.swift */; };
+		ECB2EE612AB50E22B606BE2A /* MainWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B18E84EDF29017B8781981C /* MainWindowController.swift */; };
+		F7CD0C67200AC5D485B9FAE1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 953DDE152524FC7C994DCE95 /* Assets.xcassets */; };
+		FE97E553492E2DA91FAA5CE4 /* StreamRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89D9C3F4C53ED4EA64232D22 /* StreamRecorder.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		13467F4D59995AF2D2A14F46 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = EEB15A658E1BFA20CA896576 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CCD76127106819534FD5F402;
+			remoteInfo = PocketStudio;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0A56CA96E6F1AC8A4F96DD44 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		0CDF6DC40C2C94A9EABEE388 /* VideoHealthMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoHealthMonitor.swift; sourceTree = "<group>"; };
+		0DBF5C4C2F9978DB02329C25 /* CoreProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreProtocolTests.swift; sourceTree = "<group>"; };
+		12D9B7E4BA85345395FC8200 /* DatagramTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DatagramTransport.swift; sourceTree = "<group>"; };
+		12EB27A5C28ECEDEC1DE234F /* DJISessionCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DJISessionCore.swift; sourceTree = "<group>"; };
+		14694BAA71797A3412C08975 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		1AE2CC218682780D9DB6F9AF /* CameraLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraLink.swift; sourceTree = "<group>"; };
+		1BE2E303693571AF26012D19 /* PocketStudioTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PocketStudioTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		1D0A4A89E86BDBAD04F5F00C /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		1E430E4EAB614BB491C6DB14 /* StatusViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusViewController.swift; sourceTree = "<group>"; };
+		28E2C1B0E63207CDA02925A2 /* H264Decoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H264Decoder.swift; sourceTree = "<group>"; };
+		300C8A2E98DEC7B36F91930B /* VideoPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPipeline.swift; sourceTree = "<group>"; };
+		3045B596FEF04EF2011511D6 /* UDPFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UDPFrame.swift; sourceTree = "<group>"; };
+		37617ABEC0C8F8122996FDE8 /* CameraLinkLoopbackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraLinkLoopbackTests.swift; sourceTree = "<group>"; };
+		3B18E84EDF29017B8781981C /* MainWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindowController.swift; sourceTree = "<group>"; };
+		3F932ADC7C29ABF0B738A4C2 /* GimbalControlTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GimbalControlTests.swift; sourceTree = "<group>"; };
+		5B4E535F58ACA5334EBED7D6 /* CameraProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraProtocol.swift; sourceTree = "<group>"; };
+		69B58AB6D29B6532A62C2150 /* OnboardingWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingWindowController.swift; sourceTree = "<group>"; };
+		6A3ADD7A2C1453268CB6C9DC /* HelpViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpViewController.swift; sourceTree = "<group>"; };
+		6AB2C08191014C7479306735 /* GimbalProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GimbalProtocol.swift; sourceTree = "<group>"; };
+		6B950018E9EB78FD3430CF8D /* DJIBLEMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DJIBLEMessage.swift; sourceTree = "<group>"; };
+		6DEDAD161BF947A7AF963BE9 /* DUML.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DUML.swift; sourceTree = "<group>"; };
+		7078BB4EDA332C646152570D /* ConnectViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectViewController.swift; sourceTree = "<group>"; };
+		7AFB692E719065B6C5B6F5D4 /* ShutterButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShutterButton.swift; sourceTree = "<group>"; };
+		7D4539686D54731EC7062172 /* UIKitHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIKitHelpers.swift; sourceTree = "<group>"; };
+		824C2BD53D182525E8BD329A /* H264AnnexB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H264AnnexB.swift; sourceTree = "<group>"; };
+		862A746892FE394A566BC4BF /* VideoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoView.swift; sourceTree = "<group>"; };
+		885D101506209061A3225D54 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		89D9C3F4C53ED4EA64232D22 /* StreamRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamRecorder.swift; sourceTree = "<group>"; };
+		8C0B7C4BAF5100F990D038FC /* SettingsWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindowController.swift; sourceTree = "<group>"; };
+		8DE3D895DAF6A3D38CFA6C3F /* CameraCommandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraCommandTests.swift; sourceTree = "<group>"; };
+		92ADC1A36E72D8ADC0202F08 /* CaptureControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureControl.swift; sourceTree = "<group>"; };
+		92DF3ED0B0F9053EA2210DCE /* TCPPoke.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCPPoke.swift; sourceTree = "<group>"; };
+		953DDE152524FC7C994DCE95 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A1615C625FA6183E55817EB9 /* JoystickView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoystickView.swift; sourceTree = "<group>"; };
+		A9597AB6F7AEB3431085BFD1 /* BLEManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BLEManager.swift; sourceTree = "<group>"; };
+		BC06519F8E473B05347849D1 /* CRC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CRC.swift; sourceTree = "<group>"; };
+		BFFBB2BB8B82B2F1FCE95A72 /* GimbalSpeedController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GimbalSpeedController.swift; sourceTree = "<group>"; };
+		C59BE6F0DCE93556AC349232 /* LocalNetworkPermission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNetworkPermission.swift; sourceTree = "<group>"; };
+		C6742C1B15CFD42DAF656307 /* ByteIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteIO.swift; sourceTree = "<group>"; };
+		C99E9C25E112D34567AA19A6 /* DebugViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugViewController.swift; sourceTree = "<group>"; };
+		D7988210434A11503A3E4D1B /* PocketStudio.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PocketStudio.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EACB7E245E7EE1137DE94401 /* WiFiManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiManager.swift; sourceTree = "<group>"; };
+		F303E03F2E5ADAEAE41294BE /* NWDatagramTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NWDatagramTransport.swift; sourceTree = "<group>"; };
+		FF4BB8BD4DFBF3F2E71D7CE2 /* LiveViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveViewController.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		06E2355992FFCBD975FD649F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				D7988210434A11503A3E4D1B /* PocketStudio.app */,
+				1BE2E303693571AF26012D19 /* PocketStudioTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		2F363E7166B58191B25759B8 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				953DDE152524FC7C994DCE95 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		83F9F157E39C188F3FE5C920 /* PocketStudio */ = {
+			isa = PBXGroup;
+			children = (
+				EDEB1208B7628A3FC3190D36 /* App */,
+				9F330AE1DCC3A7F1C8F6136A /* Core */,
+				9E7367DA6FAA993CC472A47B /* Platform */,
+				2F363E7166B58191B25759B8 /* Resources */,
+				BAE8DFBFD615A75200D916BA /* Views */,
+			);
+			path = PocketStudio;
+			sourceTree = "<group>";
+		};
+		9E7367DA6FAA993CC472A47B /* Platform */ = {
+			isa = PBXGroup;
+			children = (
+				A9597AB6F7AEB3431085BFD1 /* BLEManager.swift */,
+				28E2C1B0E63207CDA02925A2 /* H264Decoder.swift */,
+				C59BE6F0DCE93556AC349232 /* LocalNetworkPermission.swift */,
+				F303E03F2E5ADAEAE41294BE /* NWDatagramTransport.swift */,
+				89D9C3F4C53ED4EA64232D22 /* StreamRecorder.swift */,
+				92DF3ED0B0F9053EA2210DCE /* TCPPoke.swift */,
+				300C8A2E98DEC7B36F91930B /* VideoPipeline.swift */,
+				EACB7E245E7EE1137DE94401 /* WiFiManager.swift */,
+			);
+			path = Platform;
+			sourceTree = "<group>";
+		};
+		9F330AE1DCC3A7F1C8F6136A /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				C6742C1B15CFD42DAF656307 /* ByteIO.swift */,
+				5B4E535F58ACA5334EBED7D6 /* CameraProtocol.swift */,
+				92ADC1A36E72D8ADC0202F08 /* CaptureControl.swift */,
+				BC06519F8E473B05347849D1 /* CRC.swift */,
+				6B950018E9EB78FD3430CF8D /* DJIBLEMessage.swift */,
+				12EB27A5C28ECEDEC1DE234F /* DJISessionCore.swift */,
+				6DEDAD161BF947A7AF963BE9 /* DUML.swift */,
+				6AB2C08191014C7479306735 /* GimbalProtocol.swift */,
+				BFFBB2BB8B82B2F1FCE95A72 /* GimbalSpeedController.swift */,
+				824C2BD53D182525E8BD329A /* H264AnnexB.swift */,
+				3045B596FEF04EF2011511D6 /* UDPFrame.swift */,
+				0CDF6DC40C2C94A9EABEE388 /* VideoHealthMonitor.swift */,
+				F5D2F9CAF5383A54D5A4E184 /* Link */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		AF066BA4935616F139B86D25 /* PocketStudioTests */ = {
+			isa = PBXGroup;
+			children = (
+				8DE3D895DAF6A3D38CFA6C3F /* CameraCommandTests.swift */,
+				37617ABEC0C8F8122996FDE8 /* CameraLinkLoopbackTests.swift */,
+				0DBF5C4C2F9978DB02329C25 /* CoreProtocolTests.swift */,
+				3F932ADC7C29ABF0B738A4C2 /* GimbalControlTests.swift */,
+			);
+			path = PocketStudioTests;
+			sourceTree = "<group>";
+		};
+		BAE8DFBFD615A75200D916BA /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				7078BB4EDA332C646152570D /* ConnectViewController.swift */,
+				C99E9C25E112D34567AA19A6 /* DebugViewController.swift */,
+				6A3ADD7A2C1453268CB6C9DC /* HelpViewController.swift */,
+				A1615C625FA6183E55817EB9 /* JoystickView.swift */,
+				FF4BB8BD4DFBF3F2E71D7CE2 /* LiveViewController.swift */,
+				3B18E84EDF29017B8781981C /* MainWindowController.swift */,
+				69B58AB6D29B6532A62C2150 /* OnboardingWindowController.swift */,
+				8C0B7C4BAF5100F990D038FC /* SettingsWindowController.swift */,
+				7AFB692E719065B6C5B6F5D4 /* ShutterButton.swift */,
+				1E430E4EAB614BB491C6DB14 /* StatusViewController.swift */,
+				7D4539686D54731EC7062172 /* UIKitHelpers.swift */,
+				862A746892FE394A566BC4BF /* VideoView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		EB6DC8F1E474746A6A31DB54 = {
+			isa = PBXGroup;
+			children = (
+				83F9F157E39C188F3FE5C920 /* PocketStudio */,
+				AF066BA4935616F139B86D25 /* PocketStudioTests */,
+				06E2355992FFCBD975FD649F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		EDEB1208B7628A3FC3190D36 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				1D0A4A89E86BDBAD04F5F00C /* AppDelegate.swift */,
+				0A56CA96E6F1AC8A4F96DD44 /* AppModel.swift */,
+				885D101506209061A3225D54 /* AppSettings.swift */,
+				14694BAA71797A3412C08975 /* main.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		F5D2F9CAF5383A54D5A4E184 /* Link */ = {
+			isa = PBXGroup;
+			children = (
+				1AE2CC218682780D9DB6F9AF /* CameraLink.swift */,
+				12D9B7E4BA85345395FC8200 /* DatagramTransport.swift */,
+			);
+			path = Link;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		0C40992CDCA0BED28346869D /* PocketStudioTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A581C02C57301B36AD6724C /* Build configuration list for PBXNativeTarget "PocketStudioTests" */;
+			buildPhases = (
+				32AC6184C84AF32B538D800D /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B93F43013DE13F86D48CB9B4 /* PBXTargetDependency */,
+			);
+			name = PocketStudioTests;
+			packageProductDependencies = (
+			);
+			productName = PocketStudioTests;
+			productReference = 1BE2E303693571AF26012D19 /* PocketStudioTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		CCD76127106819534FD5F402 /* PocketStudio */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 542BD162F7F4377FE1B5F81B /* Build configuration list for PBXNativeTarget "PocketStudio" */;
+			buildPhases = (
+				BAE86F00641471C152504C07 /* Sources */,
+				1CEB6CE7DBB5ACB35C3DCBF9 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PocketStudio;
+			packageProductDependencies = (
+			);
+			productName = PocketStudio;
+			productReference = D7988210434A11503A3E4D1B /* PocketStudio.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		EEB15A658E1BFA20CA896576 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					CCD76127106819534FD5F402 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 05C32E778A09495C01016A5F /* Build configuration list for PBXProject "PocketStudio" */;
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				"zh-Hans",
+			);
+			mainGroup = EB6DC8F1E474746A6A31DB54;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 06E2355992FFCBD975FD649F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				CCD76127106819534FD5F402 /* PocketStudio */,
+				0C40992CDCA0BED28346869D /* PocketStudioTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		1CEB6CE7DBB5ACB35C3DCBF9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F7CD0C67200AC5D485B9FAE1 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		32AC6184C84AF32B538D800D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3D9197DC851B4720034963CC /* CameraCommandTests.swift in Sources */,
+				B8B0757AF215F5B14AAB6EDE /* CameraLinkLoopbackTests.swift in Sources */,
+				1E1FEDE6D95087EF2052A8D2 /* CoreProtocolTests.swift in Sources */,
+				19E3C6559A38F2A25C1235B3 /* GimbalControlTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BAE86F00641471C152504C07 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B95F60EAF191B0FFFED22033 /* AppDelegate.swift in Sources */,
+				E3FA8D4E4F049CA9FAC8EDC6 /* AppModel.swift in Sources */,
+				9B83E4607964A27E1D1D4648 /* AppSettings.swift in Sources */,
+				AE280733FAD5AB13C8A76A78 /* BLEManager.swift in Sources */,
+				2F32F8433BE658565A526DC8 /* ByteIO.swift in Sources */,
+				6D3E79035140ED9E147BBFAC /* CRC.swift in Sources */,
+				CB8D310C201A94425198AB86 /* CameraLink.swift in Sources */,
+				17A70E87EB339D01E37893A7 /* CameraProtocol.swift in Sources */,
+				7D323FFE728AA0D2B8494A09 /* CaptureControl.swift in Sources */,
+				BEC235533C1B9345D5EC1952 /* ConnectViewController.swift in Sources */,
+				8433D8381B42C2AE2587E5A3 /* DJIBLEMessage.swift in Sources */,
+				793D2F9A0A477C64F54429B7 /* DJISessionCore.swift in Sources */,
+				7AFF1464BFA8013DB932FA9D /* DUML.swift in Sources */,
+				C611BA871E0B3F555C4C26AF /* DatagramTransport.swift in Sources */,
+				5F4A50A4F510E0C0FB3FE0F8 /* DebugViewController.swift in Sources */,
+				9361039A897E4028F108138C /* GimbalProtocol.swift in Sources */,
+				AF0FA0C706432F2B5DE02833 /* GimbalSpeedController.swift in Sources */,
+				3DB9FB3854D12B343F071BE1 /* H264AnnexB.swift in Sources */,
+				51E4062487774F9E26F7724E /* H264Decoder.swift in Sources */,
+				A51073608A8A671B6B2640E5 /* HelpViewController.swift in Sources */,
+				C43A23E661A675A5A0F2C84F /* JoystickView.swift in Sources */,
+				540340E2FE72CBCF67893BBE /* LiveViewController.swift in Sources */,
+				49F6E89048CDDD8B840CE764 /* LocalNetworkPermission.swift in Sources */,
+				ECB2EE612AB50E22B606BE2A /* MainWindowController.swift in Sources */,
+				2D600C0C30ABABDA040EBC10 /* NWDatagramTransport.swift in Sources */,
+				1C189F9AB00C0998F55EB9EE /* OnboardingWindowController.swift in Sources */,
+				7545DEACBC958971E9CD8B14 /* SettingsWindowController.swift in Sources */,
+				8CEBA6F590F496825ADE7074 /* ShutterButton.swift in Sources */,
+				94162E57CE0A61CA2C46688B /* StatusViewController.swift in Sources */,
+				FE97E553492E2DA91FAA5CE4 /* StreamRecorder.swift in Sources */,
+				6E1B062EA8B92D050DA959CD /* TCPPoke.swift in Sources */,
+				6B0CE62DA6EFBC5A1C80EB7D /* UDPFrame.swift in Sources */,
+				B323220BEEB7E83A3CCF5FD9 /* UIKitHelpers.swift in Sources */,
+				D9AAE3CBE9B99EAE5AE1BD81 /* VideoHealthMonitor.swift in Sources */,
+				690221E285CFA3735C043D5B /* VideoPipeline.swift in Sources */,
+				B3ABD7429B52B626A9D28D9E /* VideoView.swift in Sources */,
+				3709D07282A8C4C1AA6C9898 /* WiFiManager.swift in Sources */,
+				BA32CA6635A166A3A5223345 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B93F43013DE13F86D48CB9B4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CCD76127106819534FD5F402 /* PocketStudio */;
+			targetProxy = 13467F4D59995AF2D2A14F46 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		036F80551EF786769C8305E9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = PocketStudio/Resources/PocketStudio.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = PocketStudio/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.pocketstudio.app;
+				PRODUCT_MODULE_NAME = PocketStudio;
+				PRODUCT_NAME = "PocketStudio";
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		3C8D22D1CFE2DB8B6411A3D5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = PocketStudio/Resources/PocketStudio.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = PocketStudio/Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.pocketstudio.app;
+				PRODUCT_MODULE_NAME = PocketStudio;
+				PRODUCT_NAME = "PocketStudio";
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		79C78FE222FD65539929F0DD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_INFER_ISOLATED_CONFORMANCES = YES;
+				SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		8C5B6740A84DB3C408C97A61 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_UPCOMING_FEATURE_INFER_ISOLATED_CONFORMANCES = YES;
+				SWIFT_UPCOMING_FEATURE_NONISOLATED_NONSENDING_BY_DEFAULT = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		B78BCE54F942A4B182E9EA7A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.pocketstudio.app.tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PocketStudio.app/Contents/MacOS/PocketStudio";
+			};
+			name = Debug;
+		};
+		C1200233FC1ED5EA10E6A62A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "-";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.pocketstudio.app.tests;
+				SDKROOT = macosx;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PocketStudio.app/Contents/MacOS/PocketStudio";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		05C32E778A09495C01016A5F /* Build configuration list for PBXProject "PocketStudio" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				79C78FE222FD65539929F0DD /* Debug */,
+				8C5B6740A84DB3C408C97A61 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		1A581C02C57301B36AD6724C /* Build configuration list for PBXNativeTarget "PocketStudioTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B78BCE54F942A4B182E9EA7A /* Debug */,
+				C1200233FC1ED5EA10E6A62A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		542BD162F7F4377FE1B5F81B /* Build configuration list for PBXNativeTarget "PocketStudio" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3C8D22D1CFE2DB8B6411A3D5 /* Debug */,
+				036F80551EF786769C8305E9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = EEB15A658E1BFA20CA896576 /* Project object */;
+}
