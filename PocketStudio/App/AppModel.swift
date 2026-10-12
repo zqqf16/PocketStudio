@@ -78,7 +78,11 @@ final class AppModel {
     private var modeIndex = 1 // 原项目从「录像」开始循环
     /// 模式选择（乐观更新 + 状态核对）
     private(set) var captureMode = CaptureModeState()
+    /// 本次连接识别到的机型。未识别前界面用「Osmo Pocket」，不写死 Pocket 3。
+    private(set) var deviceProfile: DeviceProfile = .unidentified
     var displayedMode: CameraMode? { captureMode.displayed }
+    private var lastStatus80 = Bytes()
+    private var lastStatus80At = 0.0
 
     private func applySnapshot(_ s: LinkSnapshot) {
         snapshot = s
@@ -111,6 +115,7 @@ final class AppModel {
         ble.onLog = { [weak self] s in Task { @MainActor in self?.log(s) } }
         ble.onBattery = { [weak self] b in Task { @MainActor in self?.bleBattery = b; self?.changed() } }
         video.onError = { [weak self] e in Task { @MainActor in self?.log("视频：\(e)") } }
+        video.onNote = { [weak self] e in Task { @MainActor in self?.log("视频：\(e)") } }
         video.onNeedKeyframe = { [weak self] reason in
             Task { @MainActor in self?.requestKeyframe(reason) }
         }
@@ -148,6 +153,7 @@ final class AppModel {
         lastPeriodicAt = now
         if isConnected { videoStats = video.stats(); captureMode.tick(now: now); runWatchdog(now: now); changed() }
         let batch = pending.drain()
+        if !batch.isEmpty { logCameraStatus80(batch) }
         if !batch.isEmpty, !logPaused {
             dumlLog += batch
             if dumlLog.count > 3000 { dumlLog.removeFirst(dumlLog.count - 3000) }
@@ -156,6 +162,23 @@ final class AppModel {
     }
 
     func clearLogs() { dumlLog = []; textLog = []; NotificationCenter.default.post(name: .logAppended, object: self) }
+
+    /// 调试用：记下 Camera:0x80 原始字节，方便 Pocket 4/4P 用户回传。模式字节变化立刻记，其余最多 5 秒一条。
+    private func logCameraStatus80(_ batch: [DUMLLogEntry]) {
+        let now = ProcessInfo.processInfo.systemUptime
+        for e in batch where e.direction == .rx && e.packet.cmdSet == 2 && e.packet.cmdID == 0x80 {
+            let p = e.packet.payload
+            let mode = p.count >= 58 ? p[57] : nil
+            let prevMode = lastStatus80.count >= 58 ? lastStatus80[57] : nil
+            if lastStatus80.isEmpty || mode != prevMode || now - lastStatus80At >= 5 {
+                lastStatus80 = p
+                lastStatus80At = now
+                let modeText = mode.map { String(format: "0x%02X", $0) } ?? "—"
+                log("[调试] Camera:0x80 \(p.count)B \(p.hexString(separator: " ")) · 型号 \(deviceProfile.displayName) · @57=\(modeText)")
+            }
+            return
+        }
+    }
 
     private func setStep(_ i: Int, _ st: StepStatus, _ detail: String = "") {
         guard steps.indices.contains(i) else { return }
@@ -170,6 +193,7 @@ final class AppModel {
 
     func connect() {
         guard !isBusy, !isConnected else { return }
+        deviceProfile = .unidentified
         let ssid = settings.ssid
         if ssid.isEmpty && !settings.skipWiFi {
             log("尚未填写相机 Wi-Fi 名称，将使用手动加入引导")
@@ -216,6 +240,7 @@ final class AppModel {
             }
             ble.disconnect()
             try Task.checkCancellation()
+            resolveProfile()
             try await udpStep()
             setStep(6, .active, "发送 Mimo 启动序列（DM368 注册 + 视频心跳）…")
             try await Task.sleep(nanoseconds: 700_000_000)
@@ -257,14 +282,16 @@ final class AppModel {
     }
 
     private func bleActivateOnce() async throws {
-        setStep(0, .active, "正在通过蓝牙寻找 DJI Pocket 3…")
+        setStep(0, .active, "正在通过蓝牙寻找 Osmo Pocket…")
         var devices = try await ble.scan(timeout: settings.bleTimeout)
-        let pockets = devices.filter { $0.model == DJIBLE.pocket3Model }
+        let pockets = devices.filter { $0.profile.isPocketSeries }
         if !pockets.isEmpty { devices = pockets }
         else if devices.isEmpty { throw BLEError.notFound }
-        else { log("未发现 Pocket 3，但找到：\(devices.map { "\($0.name)(\($0.model))" }.joined(separator: ", "))，尝试第一台") }
+        else { log("未发现 Pocket 系列，但找到：\(devices.map { "\($0.name)（\($0.profile.displayName)）" }.joined(separator: ", "))，尝试第一台") }
         let dev = devices[0]
-        setStep(0, .done, "找到 \(dev.name)（\(dev.model)）")
+        deviceProfile = dev.profile
+        setStep(0, .done, "找到 \(dev.name)（\(dev.profile.displayName)）")
+        log("识别型号：\(dev.profile.displayName)，UDP \(dev.profile.udpPort)\(dev.profile.modeIDsUnverified ? "（部分模式号尚未实机确认，不会扫描未知 0xE1）" : "")")
 
         setStep(1, .active, "正在与 \(dev.name) 配对…首次配对请在相机屏幕上点「允许」")
         try await ble.connect(dev)
@@ -337,7 +364,7 @@ final class AppModel {
     }
 
     private func udpStep() async throws {
-        setStep(5, .active, "与相机 \(settings.cameraIP):9004 握手…")
+        setStep(5, .active, "与相机 \(settings.cameraIP):\(deviceProfile.udpPort) 握手…")
         do {
             let l = try await openLink()
             setStep(5, .done, String(format: "握手成功，相机 session 0x%04X", l.currentSnapshot().sessionID))
@@ -352,11 +379,11 @@ final class AppModel {
     @discardableResult
     private func openLink() async throws -> CameraLink {
         if settings.tcpPoke {
-            if await poke.ensure(host: settings.cameraIP) { log("TCP 7001 SetPairingPIN 已就绪（保持连接）") }
+            if await poke.ensure(host: settings.cameraIP, pin: ble.activePairPIN) { log("TCP 7001 SetPairingPIN 已就绪（PIN \(ble.activePairPIN)，保持连接）") }
             else { log("TCP 7001 未就绪（不影响继续，部分固件不需要）") }
         }
         let transport: DatagramTransport = settings.transport == .bsd ? BSDDatagramTransport() : NWDatagramTransport(wifiOnly: settings.wifiInterfaceOnly)
-        let l = CameraLink(host: settings.cameraIP, transport: transport)
+        let l = CameraLink(host: settings.cameraIP, port: deviceProfile.udpPort, transport: transport, profile: deviceProfile)
         Self.configure(l, settings)
         let pipeline = video
         pipeline.reset()
@@ -479,6 +506,24 @@ final class AppModel {
                       rendererStatus(), h.rendererFlushes, h.waitingKeyframe ? "是" : "否", h.droppedWhileWaiting,
                       h.keyframeRequests, h.gopFrames, h.recPending, h.pendingIngest, mainLagMax, rx, vp, types,
                       s.gimbalReady ? "就绪" : "准备中")
+            + " · 型号 \(deviceProfile.displayName) · 编码 \(video.mediaNotes().codec) · 帧头 \(video.mediaNotes().frameHeader) · UDP \(deviceProfile.udpPort)"
+    }
+
+    /// 蓝牙没给出型号时，用用户填写的 Wi-Fi 名称（OsmoPocket4P-XXXX 这类）再认一次。仍没有就按 Pocket 3，避免改变现有连接。
+    private func resolveProfile() {
+        if deviceProfile.isPocketSeries { return }
+        let named = DeviceProfile.detect(manufacturerData: nil, localName: settings.ssid.isEmpty ? nil : settings.ssid)
+        if named.isPocketSeries {
+            deviceProfile = named
+            log("按 Wi-Fi 名称识别为 \(named.displayName)（UDP \(named.udpPort)）")
+            return
+        }
+        if deviceProfile.isDJI {
+            log("厂商数据是 DJI，但型号字节未知。模式号暂用 Pocket 3，UDP \(deviceProfile.udpPort)。请把上面的厂商数据原样发回。")
+            return
+        }
+        deviceProfile = .pocket3
+        log("未能识别型号，按 Osmo Pocket 3 的模式号和 SD 卡解析继续（不扫描未知 0xE1）")
     }
 
     // MARK: 自动重连（退避）
@@ -551,12 +596,13 @@ final class AppModel {
         if !settings.skipBLE {
             do {
                 var devs = try await ble.scan(timeout: min(settings.bleTimeout, 8))
-                let p = devs.filter { $0.model == DJIBLE.pocket3Model }
+                let p = devs.filter { $0.profile.isPocketSeries }
                 if !p.isEmpty { devs = p }
                 guard let d = devs.first else { throw BLEError.notFound }
+                deviceProfile = d.profile
                 try await ble.connect(d)
                 _ = try await ble.pair()
-                log("蓝牙重新唤醒：\(d.name) 已配对")
+                log("蓝牙重新唤醒：\(d.name)（\(d.profile.displayName)）已配对")
             } catch is CancellationError { throw CancellationError() }
             catch { log("蓝牙唤醒失败（继续尝试 Wi-Fi）：\(error.localizedDescription)") }
         }
@@ -586,6 +632,7 @@ final class AppModel {
         phase = .idle
         steps = Self.freshSteps()
         snapshot = LinkSnapshot()
+        deviceProfile = .unidentified
         log("已断开")
         changed()
     }
@@ -617,14 +664,19 @@ final class AppModel {
         // 界面立即切换；命令防抖 400ms 只发最后一次（13:51 日志：7s 内连发 6 次切换后相机停止应答）
         captureMode.request(m, now: ProcessInfo.processInfo.systemUptime)
         changed()
-        if let i = CameraMode.switchable.firstIndex(where: { $0 == m }) { modeIndex = i }
+        if let i = Shutter.segments(for: deviceProfile).firstIndex(of: m) { modeIndex = i }
         modeSendTask?.cancel()
         modeSendTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 400_000_000)
             guard let self, !Task.isCancelled else { return }
             if self.snapshot.camera.hasCameraStatus, self.snapshot.camera.mode == m { self.log("模式已是「\(m.displayName)」，不重复发送"); return }
+            guard let spec = CameraCommand.setMode(m, profile: self.deviceProfile) else {
+                self.log("「\(m.displayName)」在 \(self.deviceProfile.displayName) 上没有已知模式号，未发送")
+                return
+            }
             self.link?.setMode(m)
-            self.log(String(format: "切换模式：%@（0x02/0xE1 [%02X]）", m.displayName, m.rawValue))
+            let unverified = self.deviceProfile.modeIDsUnverified ? "（该机型模式号未全部实机确认）" : ""
+            self.log(String(format: "切换模式：%@（0x02/0xE1 [%02X]）%@", m.displayName, spec.payload.first ?? 0, unverified))
         }
     }
     private var modeSendTask: Task<Void, Never>?
@@ -645,8 +697,10 @@ final class AppModel {
         log("相机应答 · \(name)：\(CameraCommand.describeReply(cmdID: p.cmdID, payload: p.payload))\(ok ? "" : "（\(p.payload.prefix(4).map { String(format: "%02x", $0) }.joined(separator: " "))）")")
     }
     func cycleMode() {
-        modeIndex = (modeIndex + 1) % CameraMode.switchable.count
-        setMode(CameraMode.switchable[modeIndex])
+        let segs = Shutter.segments(for: deviceProfile)
+        guard !segs.isEmpty else { return }
+        modeIndex = (modeIndex + 1) % segs.count
+        setMode(segs[modeIndex])
     }
     /// 「刷新视频」：彻底重置。实机日志：原地重新握手（11:41:20、11:41:49）后相机仍零应答、画面不恢复，
     /// 而断开重连（新 socket）立即恢复 → 刷新改为重建整条 UDP 链路。
@@ -715,7 +769,8 @@ final class AppModel {
             guard isConnected else { log("请先连接相机"); return }
             do {
                 let fmt = settings.recordingFormat
-                let url = try newFileURL(ext: fmt == .mp4 ? "mp4" : "h264")
+                let rawExt = video.detectedCodec() == .hevc ? "h265" : "h264"
+                let url = try newFileURL(ext: fmt == .mp4 ? "mp4" : rawExt)
                 try video.startRecording(to: url, format: fmt)
                 isLocalRecording = true
                 log("开始录制到 \(url.path)")

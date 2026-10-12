@@ -11,18 +11,18 @@ final class TCPPoke {
     private let queue = DispatchQueue(label: "pocketstudio.tcp7001")
 
     /// 已就绪则复用（OPC：第二次连接再开 TCP 会 RST 相机仍持有的那条）
-    func ensure(host: String) async -> Bool {
+    func ensure(host: String, pin: String = DJIBLE.pairPIN) async -> Bool {
         if isReady, let c = conn, c.state == .ready { return true }
         close()
         for _ in 1 ... 3 {
-            if await once(host: host) { return true }
+            if await once(host: host, pin: pin) { return true }
             close()
             try? await Task.sleep(nanoseconds: 350_000_000)
         }
         return false
     }
 
-    private func once(host: String) async -> Bool {
+    private func once(host: String, pin: String) async -> Bool {
         let p = NWParameters.tcp
         p.requiredInterfaceType = .wifi
         let c = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: DJITCPPoke.port)!, using: p)
@@ -40,7 +40,7 @@ final class TCPPoke {
             queue.asyncAfter(deadline: .now() + 2) { if once.fire() { cont.resume(returning: false) } }
         }
         guard ok else { return false }
-        c.send(content: Data(DJITCPPoke.frame), completion: .idempotent)
+        c.send(content: Data(DJITCPPoke.frame(pin: pin)), completion: .idempotent)
         try? await Task.sleep(nanoseconds: 400_000_000)
         guard c.state == .ready else { return false }
         Self.drain(c)

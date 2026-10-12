@@ -120,7 +120,7 @@ final class DebugViewController: NSViewController, NSTableViewDataSource, NSTabl
         grid.rowSpacing = 10; grid.column(at: 0).xPlacement = .trailing
         let stack = UI.vstack([
             UI.title("通过蓝牙让相机直接推流 RTMP"),
-            UI.wrappingLabel("原项目 ble.py 中保留的 Moblin 直播能力（主流程未使用）：相机经蓝牙配对后，自行连接你的路由器 Wi-Fi，并向 RTMP 服务器推流。与本机实时取景互斥——请先断开相机连接。此功能未在 Pocket 3 上充分验证。"),
+            UI.wrappingLabel("原项目 ble.py 中保留的 Moblin 直播能力（主流程未使用）：相机经蓝牙配对后，自行连接你的路由器 Wi-Fi，并向 RTMP 服务器推流。与本机实时取景互斥——请先断开相机连接。此功能尚未充分验证。"),
             CardView(grid),
             UI.hstack([UI.button("开始推流", symbol: "dot.radiowaves.up.forward", target: self, action: #selector(startRTMP), prominent: true),
                        UI.button("停止推流", symbol: "stop.fill", target: self, action: #selector(stopRTMP))], spacing: 10),

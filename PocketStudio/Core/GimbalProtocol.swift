@@ -1,4 +1,6 @@
 // GimbalProtocol.swift — 云台 (PTZ) 控制（移植自 pocket3/gimbal.py，
+// 载荷在 Pocket 4 / 4P 上保持不变。轴顺序与正负方向只在 Pocket 3 上实机确认，4/4P 未验证。
+// 不实现长焦镜头切换。
 
 import Foundation
 // 并参考 lib-osmo-ble PROTOCOL.md 增加回中 / 模式等实验命令）

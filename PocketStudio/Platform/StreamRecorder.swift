@@ -10,7 +10,7 @@ import Foundation
 
 nonisolated enum RecordingFormat: String, CaseIterable, Sendable {
     case mp4, h264
-    var displayName: String { self == .mp4 ? "MP4（推荐，QuickTime 可播放）" : "原始 H.264（与原项目一致）" }
+    var displayName: String { self == .mp4 ? "MP4（直通封装，H.264 / HEVC，不重新编码）" : "原始码流（H.264 或 HEVC Annex-B）" }
 }
 
 /// 隔离：nonisolated，只在 VideoPipeline.recQueue 上使用。
@@ -51,6 +51,7 @@ nonisolated final class StreamRecorder: @unchecked Sendable {
         let fd = CMSampleBufferGetFormatDescription(sb)
         if !started {
             guard isKeyframe, let fd else { return }
+            // outputSettings: nil = 直通。格式描述来自 H.264 参数集时是 avc1，来自 HEVC 参数集时是 hvc1。
             let inp = AVAssetWriterInput(mediaType: .video, outputSettings: nil, sourceFormatHint: fd)
             inp.expectsMediaDataInRealTime = true
             guard writer.canAdd(inp) else { return }

@@ -15,7 +15,7 @@ final class LiveViewController: NSViewController {
     private let videoView = VideoView()
     private let placeholder = NSStackView()
     private let placeholderTitle = UI.label("未连接相机", size: 20, weight: .semibold, color: .white)
-    private let placeholderDetail = UI.wrappingLabel("点击「连接」开始：App 会通过蓝牙唤醒 Pocket 3 的 Wi-Fi，再接收实时画面。", size: 13, color: NSColor.white.withAlphaComponent(0.7))
+    private let placeholderDetail = UI.wrappingLabel("点击「连接」开始：App 会通过蓝牙唤醒 Osmo Pocket 的 Wi-Fi，再接收实时画面。", size: 13, color: NSColor.white.withAlphaComponent(0.7))
     private lazy var placeholderButton = UI.glassButton("连接相机", symbol: "bolt.horizontal.circle", target: self, action: #selector(connectTapped), prominent: true)
 
     // HUD
@@ -265,6 +265,8 @@ final class LiveViewController: NSViewController {
     private static let railWidth: CGFloat = 60
     private static let smallButton: CGFloat = 26
     private var modeButtons: [NSButton] = []
+    private var modeStack: NSStackView?
+    private var modeSegments: [CameraMode] = Shutter.segments
 
     private func railButton(_ symbol: String, _ action: Selector, _ tip: String) -> NSButton {
         let b = NSButton(image: UI.symbol(symbol, size: 13, weight: .medium) ?? NSImage(), target: self, action: action)
@@ -308,7 +310,7 @@ final class LiveViewController: NSViewController {
     private func buildControls() {
         shutterButton.target = self
         shutterButton.action = #selector(shutterTapped)
-        modeButtons = Shutter.segments.enumerated().map { modeButton($0.element, index: $0.offset) }
+        modeButtons = modeSegments.enumerated().map { modeButton($0.element, index: $0.offset) }
         shutterTimer.alignment = .center
         shutterTimer.font = .monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
         shutterTimer.widthAnchor.constraint(equalToConstant: 52).isActive = true
@@ -366,6 +368,7 @@ final class LiveViewController: NSViewController {
 
         // 组装右侧栏
         let modes = UI.vstack(modeButtons, spacing: 2, alignment: .centerX)
+        modeStack = modes
         let shutterCol = UI.vstack([shutterButton, shutterTimer], spacing: 3, alignment: .centerX)
         let macRow = UI.hstack([localRecButton, snapshotButton], spacing: 4)
         let gimbalTitle = UI.label("云台", size: 9, weight: .semibold, color: NSColor.white.withAlphaComponent(0.6))
@@ -424,7 +427,8 @@ final class LiveViewController: NSViewController {
             placeholderButton.isHidden = false; placeholderButton.title = "重试"
         }
         if case .idle = model.phase {
-            placeholderDetail.stringValue = "点击「连接」开始：App 会通过蓝牙唤醒 Pocket 3 的 Wi-Fi，再接收实时画面。首次使用请先完成新手引导。"
+            let who = model.deviceProfile.isPocketSeries ? model.deviceProfile.displayName : "Osmo Pocket"
+            placeholderDetail.stringValue = "点击「连接」开始：App 会通过蓝牙唤醒 \(who) 的 Wi-Fi，再接收实时画面。首次使用请先完成新手引导。"
         }
 
         let cam = model.snapshot.camera
@@ -451,14 +455,16 @@ final class LiveViewController: NSViewController {
         shutterButton.isEnabled = connected && model.link != nil
         shutterTimer.stringValue = cam.recording ? String(format: "%02d:%02d", cam.recordingTimeS / 60, cam.recordingTimeS % 60) : (shownMode?.displayName ?? "—")
         shutterTimer.textColor = cam.recording ? .systemRed : NSColor.white.withAlphaComponent(0.8)
+        syncModeButtons()
         let modeEnabled = connected && !cam.recording && model.link != nil
         for (i, b) in modeButtons.enumerated() {
-            let sel = Shutter.segments[i] == shownMode
+            guard modeSegments.indices.contains(i) else { continue }
+            let sel = modeSegments[i] == shownMode
             b.isEnabled = modeEnabled
             // 选中 = 黄色图标 + 文字（iOS 相机风格），无背景胶囊；未选中白色
             let fg = sel ? NSColor.systemYellow : NSColor.white.withAlphaComponent(modeEnabled ? 0.85 : 0.38)
             b.contentTintColor = fg
-            b.attributedTitle = NSAttributedString(string: Shutter.segments[i].shortName, attributes: [
+            b.attributedTitle = NSAttributedString(string: modeSegments[i].shortName, attributes: [
                 .font: NSFont.systemFont(ofSize: 9.5, weight: sel ? .bold : .medium), .foregroundColor: fg])
             b.attributedAlternateTitle = b.attributedTitle
             b.layer?.backgroundColor = nil
@@ -665,10 +671,19 @@ final class LiveViewController: NSViewController {
     @objc private func connectTapped() { model.connect() }
     @objc private func shutterTapped() { model.shutter() }
     @objc private func manualSpeedSelected(_ s: NSMenuItem) { model.settings.gimbalSpeed = Double(s.tag - 100) / 10; refresh() }
+    private func syncModeButtons() {
+        let segs = Shutter.segments(for: model.deviceProfile)
+        guard segs != modeSegments, let modeStack else { return }
+        modeSegments = segs
+        for b in modeButtons { modeStack.removeArrangedSubview(b); b.removeFromSuperview() }
+        modeButtons = segs.enumerated().map { modeButton($0.element, index: $0.offset) }
+        for b in modeButtons { modeStack.addArrangedSubview(b) }
+    }
+
     @objc private func modeButtonTapped(_ b: NSButton) {
         let i = b.tag
-        guard Shutter.segments.indices.contains(i) else { return }
-        model.setMode(Shutter.segments[i])
+        guard modeSegments.indices.contains(i) else { return }
+        model.setMode(modeSegments[i])
         refresh()
     }
     @objc private func localRecTapped() { model.toggleLocalRecording() }
@@ -718,9 +733,13 @@ final class StatusBarView: NSView {
             battery.setSymbol(sym)
             battery.set(c.batteryMilliVolt > 0 ? "\(pct)% · \(String(format: "%.2f", Double(c.batteryMilliVolt) / 1000)) V" : "\(pct)%", tint: pct <= 15 ? .systemRed : .labelColor)
         } else { battery.set("电量 —", tint: .secondaryLabelColor) }
-        let known = c.hasStorageStatus || c.hasCameraStatus
-        sd.set(known ? (c.sdInserted ? String(format: "SD 剩余 %.1f GB", Double(c.sdFreeMB) / 1024) : "无 SD 卡") : "SD —",
-               tint: known && !c.sdInserted ? .systemOrange : .labelColor)
+        if !model.deviceProfile.parsesSDCapacity {
+            sd.set("机内存储", tint: .secondaryLabelColor)
+        } else {
+            let known = c.hasStorageStatus || c.hasCameraStatus
+            sd.set(known ? (c.sdInserted ? String(format: "SD 剩余 %.1f GB", Double(c.sdFreeMB) / 1024) : "无 SD 卡") : "SD —",
+                   tint: known && !c.sdInserted ? .systemOrange : .labelColor)
+        }
         mode.setSymbol(c.mode?.symbol ?? "camera")
         mode.set(c.hasCameraStatus ? c.modeName : "模式 —", tint: .labelColor)
         rec.set(c.recording ? String(format: "录制中 %02d:%02d", c.recordingTimeS / 60, c.recordingTimeS % 60) : "未录制", tint: c.recording ? .systemRed : .secondaryLabelColor)

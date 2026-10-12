@@ -64,7 +64,11 @@ final class StatusViewController: NSViewController {
         set("mode", c.hasCameraStatus ? "\(c.modeName)（\(c.modeRaw ?? 0)）" : "—")
         set("rec", c.recording ? "录制中" : "未录制")
         set("recTime", "\(c.recordingTimeS) 秒")
-        set("sd", c.hasStorageStatus ? (c.sdInserted ? "已插入" : "未插入") : "—")
+        if !model.deviceProfile.parsesSDCapacity {
+            set("sd", "机内存储（容量字段未确认，不显示）")
+        } else {
+            set("sd", c.hasStorageStatus ? (c.sdInserted ? "已插入 · 剩余 \(c.sdFreeMB) MB" : "未插入") : (c.hasCameraStatus && c.sdInserted ? "剩余 \(c.sdFreeMB) MB" : "—"))
+        }
         set("bat", c.batteryPercent >= 0 ? "\(c.batteryPercent)%" : "—")
         set("mv", c.batteryMilliVolt > 0 ? "\(c.batteryMilliVolt) mV" : "—")
         set("bleBat", model.bleBattery.map { "\($0)%" } ?? "—")

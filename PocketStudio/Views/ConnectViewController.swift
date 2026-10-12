@@ -78,7 +78,7 @@ final class ConnectViewController: NSViewController {
         let steps = UI.wrappingLabel("""
         1. 点击下方「拷贝密码」。
         2. 点击「打开 Wi-Fi 设置」，或点 Mac 屏幕右上角菜单栏的 Wi-Fi 图标。
-        3. 在列表中选择相机热点（名称形如 OsmoPocket3-XXXX），粘贴密码（⌘V），点「加入」。
+        3. 在列表中选择相机热点（名称形如 OsmoPocket3-XXXX 或 OsmoPocket4P-XXXX），粘贴密码（⌘V），点「加入」。
         4. 回到本窗口，App 检测到 192.168.2.x 地址后会自动继续；也可点「我已连接」。
         若列表里找不到相机热点：相机 Wi-Fi 可能尚未开启，请等待 20 秒，或在相机上重新进入「Wi-Fi/无线连接」。
         """, size: 13, color: .labelColor)

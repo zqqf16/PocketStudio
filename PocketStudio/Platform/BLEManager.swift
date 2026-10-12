@@ -10,6 +10,7 @@ struct DiscoveredDJIDevice: Identifiable, Equatable, @unchecked Sendable {
     let id: UUID
     let name: String
     let model: String
+    let profile: DeviceProfile
     let rssi: Int
     let peripheral: CBPeripheral
 }
@@ -53,6 +54,8 @@ final class BLEManager: NSObject, @preconcurrency CBCentralManagerDelegate, @pre
     private var notifyChar: CBCharacteristic?
     private var writeChar: CBCharacteristic?
     private var reassembler = DJIBLEReassembler()
+    /// 配对成功时实际使用的 PIN。TCP 7001 戳一下用同一个，避免和蓝牙配对身份不一致。
+    private(set) var activePairPIN = DJIBLE.pairPIN
 
     var onLog: ((String) -> Void)?
     var onBattery: ((Int) -> Void)?
@@ -101,7 +104,7 @@ final class BLEManager: NSObject, @preconcurrency CBCentralManagerDelegate, @pre
 
     // MARK: Scan
 
-    /// 扫描 DJI 设备；发现 Pocket 3 后再多扫 0.5 秒（与原项目一致）
+    /// 扫描 DJI 设备。Pocket 3 经常不带厂商数据，所以也按广播名匹配，并且不会在见到第一台 0x20 后提前结束。
     func scan(timeout: TimeInterval) async throws -> [DiscoveredDJIDevice] {
         try await waitUntilReady()
         found = [:]
@@ -119,19 +122,24 @@ final class BLEManager: NSObject, @preconcurrency CBCentralManagerDelegate, @pre
         guard let c = scanContinuation else { return }
         scanContinuation = nil
         central.stopScan()
-        c.resume(returning: found.values.sorted { ($0.model == DJIBLE.pocket3Model ? 0 : 1, -$0.rssi) < ($1.model == DJIBLE.pocket3Model ? 0 : 1, -$1.rssi) })
+        c.resume(returning: found.values.sorted { a, b in
+            if a.profile.isPocketSeries != b.profile.isPocketSeries { return a.profile.isPocketSeries }
+            return a.rssi > b.rssi
+        })
     }
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
-        guard let mfr = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data else { return }
-        let r = DJIBLE.identify(manufacturerData: Bytes(mfr))
-        guard r.isDJI, found[peripheral.identifier] == nil else { return }
-        let name = peripheral.name ?? (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? "DJI 设备"
-        let d = DiscoveredDJIDevice(id: peripheral.identifier, name: name, model: r.model ?? "Unknown", rssi: RSSI.intValue, peripheral: peripheral)
+        let mfr = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
+        let local = peripheral.name ?? (advertisementData[CBAdvertisementDataLocalNameKey] as? String)
+        let profile = DeviceProfile.detect(manufacturerData: mfr.map { Bytes($0) }, localName: local)
+        guard profile.isDJI, found[peripheral.identifier] == nil else { return }
+        let name = local ?? "DJI 设备"
+        let d = DiscoveredDJIDevice(id: peripheral.identifier, name: name, model: profile.displayName, profile: profile, rssi: RSSI.intValue, peripheral: peripheral)
         found[peripheral.identifier] = d
-        log("  发现：\(name) (\(d.model)) RSSI \(RSSI)")
-        if d.model == DJIBLE.pocket3Model {
-            mainAfter(0.5) { [weak self] in self?.finishScan() }
+        if let mfr {
+            log("  发现：\(name)（\(profile.displayName)）RSSI \(RSSI) · 厂商数据 \(Bytes(mfr).hexString(separator: " "))")
+        } else {
+            log("  发现：\(name)（\(profile.displayName)）RSSI \(RSSI) · 无厂商数据，按广播名识别")
         }
     }
 
@@ -231,14 +239,37 @@ final class BLEManager: NSObject, @preconcurrency CBCentralManagerDelegate, @pre
         }
     }
 
-    /// 配对。返回 true 表示相机报告「已配对」。原项目：收到任何应答即视为成功，WiFi AP 约 20 秒后开启。
+    /// 配对。先用 PIN「mbln」（Pocket 3：任何应答都继续）。超时或出错再改用「osmo」。
+    /// osmo 的 00 01 / 00 02 算成功；00 06 不是「请在屏幕上确认」。返回 true 表示相机报告已经配对。
     @discardableResult
     func pair() async throws -> Bool {
         log("正在配对…（首次配对请在相机屏幕上点击确认）")
-        let r = try await sendAndWait(DJIBLE.pairMessage)
-        if r.payload == [0, 1] { log("相机报告：已配对"); return true }
-        log("已发送配对请求，相机应当确认")
-        return false
+        do {
+            let r = try await sendAndWait(DJIBLE.pairMessage(pin: DJIBLE.pairPIN))
+            activePairPIN = DJIBLE.pairPIN
+            log("配对应答（PIN mbln）：\(r.payload.hexString(separator: " "))")
+            switch DJIBLE.interpretPairReply(pin: DJIBLE.pairPIN, payload: r.payload) {
+            case .alreadyPaired: log("相机报告：已配对"); return true
+            case .approveOnCamera: log("已发送配对请求，相机应当确认"); return false
+            case .notApproval: break
+            }
+        } catch {
+            log("PIN「mbln」没有成功（\(error.localizedDescription)），改用「osmo」重试")
+        }
+        let r = try await sendAndWait(DJIBLE.pairMessage(pin: DJIBLE.pairPINOsmo))
+        log("配对应答（PIN osmo）：\(r.payload.hexString(separator: " "))")
+        switch DJIBLE.interpretPairReply(pin: DJIBLE.pairPINOsmo, payload: r.payload) {
+        case .alreadyPaired:
+            activePairPIN = DJIBLE.pairPINOsmo
+            log("相机报告：已配对（PIN osmo）")
+            return true
+        case .approveOnCamera:
+            activePairPIN = DJIBLE.pairPINOsmo
+            log("配对请求已发送（PIN osmo，应答 00 02）。请在相机屏幕上点允许")
+            return false
+        case .notApproval:
+            throw BLEError.connectFailed("PIN「osmo」应答 \(r.payload.hexString(separator: " ")) 不是配对成功（00 06 不是屏幕确认）")
+        }
     }
 
     func stopStreaming() async {

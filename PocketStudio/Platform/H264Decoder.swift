@@ -40,7 +40,40 @@ nonisolated final class H264Decoder: @unchecked Sendable {
                 }
             }
         }
-        guard status == noErr, let fd else { onError?("创建格式描述失败 \(status)"); return false }
+        guard status == noErr, let fd else { onError?("创建 H.264 格式描述失败 \(status)"); return false }
+        return startSession(fd)
+    }
+
+    /// HEVC 参数集（VPS、SPS、PPS，无起始码）→ hvc1 格式描述。录制走 AVAssetWriter 直通，不重新编码。
+    @discardableResult
+    func configureHEVC(vps: Bytes, sps: Bytes, pps: Bytes) -> Bool {
+        invalidate()
+        guard !vps.isEmpty, !sps.isEmpty, !pps.isEmpty else { return false }
+        var fd: CMFormatDescription?
+        let status: OSStatus = vps.withUnsafeBufferPointer { v in
+            sps.withUnsafeBufferPointer { s in
+                pps.withUnsafeBufferPointer { p in
+                    let ptrs: [UnsafePointer<UInt8>] = [v.baseAddress!, s.baseAddress!, p.baseAddress!]
+                    let sizes = [vps.count, sps.count, pps.count]
+                    return ptrs.withUnsafeBufferPointer { pp in
+                        sizes.withUnsafeBufferPointer { sz in
+                            CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+                                allocator: kCFAllocatorDefault, parameterSetCount: 3,
+                                parameterSetPointers: pp.baseAddress!, parameterSetSizes: sz.baseAddress!,
+                                nalUnitHeaderLength: 4, extensions: nil, formatDescriptionOut: &fd)
+                        }
+                    }
+                }
+            }
+        }
+        guard status == noErr, let fd else { onError?("创建 HEVC 格式描述失败 \(status)"); return false }
+        if CMFormatDescriptionGetMediaSubType(fd) != kCMVideoCodecType_HEVC {
+            onError?("HEVC 格式描述不是 hvc1")
+        }
+        return startSession(fd)
+    }
+
+    private func startSession(_ fd: CMFormatDescription) -> Bool {
         formatDescription = fd
 
         let attrs: [CFString: Any] = [
@@ -100,7 +133,7 @@ nonisolated final class H264Decoder: @unchecked Sendable {
         // ⚠️ 旧版只把 session 置 nil 却保留 formatDescription → VideoPipeline 以为解码器还在，永远不重建（画面永久冻结，
         //    只有改 SPS 才能恢复）。现在会话失效时整体 invalidate（formatDescription = nil），下一 AU 用缓存参数集重建。
         if st == kVTInvalidSessionErr || cb.status == kVTInvalidSessionErr {
-            invalidate(); onError?("解码会话失效（\(st)），将用缓存的 SPS/PPS 重建并等待关键帧")
+            invalidate(); onError?("解码会话失效（\(st)），将用缓存的参数集重建并等待关键帧")
         } else if st != noErr { onError?("解码错误 \(st)") }
         else if cb.status != noErr { onError?("解码回调错误 \(cb.status)") }
     }
