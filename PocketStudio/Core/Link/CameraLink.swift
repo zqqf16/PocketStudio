@@ -84,7 +84,10 @@ nonisolated public final class CameraLink: @unchecked Sendable {
                 core.noteGimbalAttitude()
             }
             if DUMLCmdType.isReply(p.cmdType) { snapshotState.repliesRx += 1 }
-            if DUMLCmdType.isReply(p.cmdType), p.cmdSet == DUMLCmdSet.camera || p.cmdSet == DUMLCmdSet.gimbal {
+            // 0x0E / 0x4F 是 General，也要上报：实机 A/B 时文本日志需要看到应答长度和错误码。
+            if DUMLCmdType.isReply(p.cmdType),
+               p.cmdSet == DUMLCmdSet.camera || p.cmdSet == DUMLCmdSet.gimbal
+                || (p.cmdSet == DUMLCmdSet.general && (p.cmdID == 0x0E || p.cmdID == 0x4F)) {
                 onReply?(p)
             }
         }
@@ -140,7 +143,11 @@ nonisolated public final class CameraLink: @unchecked Sendable {
         every(0.02) { [weak self] in self?.core.tickAck() }
         every(GimbalProtocol.sendInterval) { [weak self] in self?.core.tickGimbal() }
         // 降频：原 5Hz（Python 原版）。OPC：命令过密会让相机停止应答。
-        every(1.0) { [weak self] in self?.core.tickCameraHeartbeat() }
+        // 0x8E 与链路心跳 0x0E 同一拍（1Hz）。0x4F 不在这里，见 tickVideoHeartbeat。
+        every(1.0) { [weak self] in
+            self?.core.tickCameraHeartbeat()
+            self?.core.tickLinkHeartbeat()
+        }
         every(0.1) { [weak self] in self?.publish() }
         queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, self.running else { return }
@@ -187,7 +194,7 @@ nonisolated public final class CameraLink: @unchecked Sendable {
     public func reRegister() { queue.async { [self] in if running { core.reRegister() } } }
 
     private var lastKeyframeRequest = -100.0
-    /// 请求关键帧（0x09/0xA8），≥3s 限频（频繁发送会让 IDR 永远到不了）。返回是否真的发送。
+    /// 请求关键帧（0x09/0xA8，并附带 Camera:0xB3），≥3s 限频（频繁发送会让 IDR 永远到不了）。返回是否真的发送。
     public func requestKeyframe(completion: (@Sendable (Bool) -> Void)? = nil) {
         queue.async { [self] in
             guard running else { completion?(false); return }
@@ -220,6 +227,9 @@ nonisolated public final class CameraLink: @unchecked Sendable {
     }
 
     public func setLegacyFraming(_ on: Bool) { queue.async { [self] in core.legacyFraming = on } }
+
+    /// 链路保活（设置项）。排队到协议队列，下一次 tick 起生效。
+    public func setLinkKeepalive(_ mode: LinkKeepalive) { queue.async { [self] in core.linkKeepalive = mode } }
 
     public func setGimbalStreaming(_ on: Bool) { queue.async { [self] in core.gimbal.streaming = on } }
 
