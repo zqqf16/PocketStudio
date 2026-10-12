@@ -12,6 +12,8 @@ The protocol is a byte-for-byte port of [sniffingpickles/DJI-Wifi-Connect](https
 >
 > Author: [@zqqf16](https://github.com/zqqf16)
 
+Landing page: https://zqqf16.github.io/PocketStudio/
+
 ## Features
 
 - Wake the camera Wi-Fi hotspot over Bluetooth, join it, and finish the UDP handshake

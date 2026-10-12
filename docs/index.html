@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PocketStudio — 在 Mac 上掌控你的 Osmo Pocket 3</title>
+<meta name="description" content="PocketStudio：原生 macOS 应用，通过 Wi-Fi 在 Mac 上控制 DJI Osmo Pocket 3。开源。">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--y:#FFD60A;--bg:#05060a;--fg:#f5f5f7;--mute:#9a9aa5;--glass:rgba(255,255,255,.06);--line:rgba(255,255,255,.12)}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--fg);font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;line-height:1.6;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+.aurora{position:fixed;inset:-20%;z-index:-2;filter:blur(80px);opacity:.55}
+.aurora i{position:absolute;border-radius:50%;animation:float 22s ease-in-out infinite alternate}
+.aurora i:nth-child(1){width:50vw;height:50vw;left:5%;top:0;background:radial-gradient(#ffd60a88,transparent 60%)}
+.aurora i:nth-child(2){width:55vw;height:55vw;right:0;top:20%;background:radial-gradient(#3a5bff77,transparent 60%);animation-duration:28s}
+.aurora i:nth-child(3){width:45vw;height:45vw;left:30%;bottom:0;background:radial-gradient(#ff3d7f55,transparent 60%);animation-duration:34s}
+@keyframes float{to{transform:translate(8vw,-6vh) scale(1.15)}}
+.grain{position:fixed;inset:0;z-index:-1;background:radial-gradient(ellipse at center,transparent 40%,#000 100%)}
+nav{position:fixed;top:0;left:0;right:0;z-index:50;display:flex;justify-content:space-between;align-items:center;padding:14px 5vw;backdrop-filter:blur(20px) saturate(1.6);-webkit-backdrop-filter:blur(20px) saturate(1.6);background:rgba(5,6,10,.5);border-bottom:1px solid var(--line)}
+.logo{font-weight:800;letter-spacing:-.02em;display:flex;gap:10px;align-items:center}
+.logo b{width:22px;height:22px;border-radius:7px;background:var(--y);box-shadow:0 0 20px var(--y);display:inline-block;position:relative}
+.logo b:after{content:"";position:absolute;inset:6px;border-radius:50%;background:#111}
+nav .links{display:flex;gap:26px;font-size:14px;color:var(--mute)}
+nav .links a:hover{color:var(--fg)}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 22px;border-radius:999px;font-weight:600;font-size:15px;transition:.25s}
+.btn.pri{background:var(--y);color:#111;box-shadow:0 8px 30px #ffd60a55}
+.btn.pri:hover{transform:translateY(-2px);box-shadow:0 12px 40px #ffd60a88}
+.btn.ghost{border:1px solid var(--line);background:var(--glass);backdrop-filter:blur(10px)}
+.btn.ghost:hover{border-color:var(--y)}
+.btn.sm{padding:8px 16px;font-size:13px}
+section{padding:120px 5vw;max-width:1240px;margin:auto}
+.hero{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding-top:130px}
+.tag{display:inline-block;padding:6px 14px;border-radius:999px;border:1px solid #ffd60a55;color:var(--y);font-size:13px;background:#ffd60a12;margin-bottom:24px}
+h1{font-size:clamp(44px,8vw,104px);line-height:1.02;letter-spacing:-.04em;font-weight:800}
+h1 em{font-style:normal;white-space:nowrap;background:linear-gradient(90deg,#fff,var(--y) 50%,#fff);background-size:200%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:shine 6s linear infinite}
+@keyframes shine{to{background-position:-200%}}
+.sub{max-width:640px;margin:24px auto 36px;color:var(--mute);font-size:clamp(16px,2vw,20px)}
+.cta{display:flex;gap:14px;flex-wrap:wrap;justify-content:center}
+h2{font-size:clamp(32px,5vw,56px);letter-spacing:-.03em;line-height:1.1;font-weight:800;margin-bottom:16px}
+.lead{color:var(--mute);max-width:620px;font-size:18px}
+.center{text-align:center}.center .lead{margin:auto}
+/* mock window */
+.stage{margin-top:70px;width:100%;max-width:1080px;perspective:1600px}
+.win{border-radius:18px;overflow:hidden;border:1px solid var(--line);background:#000;box-shadow:0 40px 120px #000c,0 0 0 1px #ffffff08,0 0 80px #ffd60a1a;transform:rotateX(8deg);transition:transform .2s ease-out;position:relative;aspect-ratio:16/10;user-select:none}
+.bar{position:absolute;top:0;left:0;right:0;height:36px;display:flex;align-items:center;gap:8px;padding:0 14px;z-index:5;background:linear-gradient(#000a,transparent);transition:opacity .4s}
+.bar i{width:12px;height:12px;border-radius:50%;background:#ff5f57}.bar i:nth-child(2){background:#febc2e}.bar i:nth-child(3){background:#28c840}
+.status{margin-left:auto;display:flex;gap:14px;font-size:11px;color:#ddd;font-variant-numeric:tabular-nums}
+.status span{padding:3px 9px;border-radius:99px;background:#ffffff14;backdrop-filter:blur(10px)}
+.view{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;cursor:grab}
+.view:active{cursor:grabbing}
+.frame{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;background:#0a0c14}
+.scene{position:absolute;inset:-30%;transition:transform .08s linear;
+background:
+radial-gradient(circle at 70% 28%,#ffe9a8 0,#ffbf47 3%,transparent 9%),
+radial-gradient(ellipse at 70% 30%,#ff9d4a55,transparent 40%),
+linear-gradient(180deg,#1b1f3d 0%,#5b3a6b 35%,#e0845a 55%,#2a1b2a 56%,#0d0b14 100%)}
+.mtn{position:absolute;left:0;right:0;bottom:44%;height:30%;background:#1a1426;clip-path:polygon(0 100%,8% 40%,18% 70%,30% 20%,42% 60%,55% 30%,68% 75%,80% 35%,92% 65%,100% 45%,100% 100%)}
+.mtn.b{bottom:42%;height:20%;background:#0f0c18;clip-path:polygon(0 100%,12% 50%,25% 80%,40% 40%,58% 85%,72% 50%,88% 80%,100% 55%,100% 100%)}
+.stars{position:absolute;inset:0 0 60% 0;background-image:radial-gradient(1px 1px at 10% 20%,#fff,transparent),radial-gradient(1px 1px at 30% 10%,#fff,transparent),radial-gradient(1px 1px at 50% 25%,#fff,transparent),radial-gradient(1px 1px at 85% 15%,#fff,transparent),radial-gradient(1px 1px at 20% 35%,#fffa,transparent),radial-gradient(1px 1px at 62% 8%,#fffa,transparent)}
+.grid3{position:absolute;inset:0;background:linear-gradient(90deg,transparent 33.2%,#ffffff22 33.3%,transparent 33.5%,transparent 66.5%,#ffffff22 66.6%,transparent 66.8%),linear-gradient(180deg,transparent 33.2%,#ffffff22 33.3%,transparent 33.5%,transparent 66.5%,#ffffff22 66.6%,transparent 66.8%);pointer-events:none}
+.rec{position:absolute;top:48px;left:16px;font-size:12px;display:flex;gap:6px;align-items:center;padding:4px 10px;border-radius:99px;background:#0008;z-index:4}
+.rec:before{content:"";width:8px;height:8px;border-radius:50%;background:#ff3b30;animation:blink 1.2s infinite}
+@keyframes blink{50%{opacity:.2}}
+.hint{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);font-size:12px;padding:6px 14px;border-radius:99px;background:#000a;border:1px solid var(--line);z-index:4;white-space:nowrap;pointer-events:none}
+.rail{position:absolute;right:14px;top:50%;transform:translateY(-50%);z-index:5;display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 10px;border-radius:26px;background:rgba(30,30,36,.45);backdrop-filter:blur(24px) saturate(1.8);-webkit-backdrop-filter:blur(24px) saturate(1.8);border:1px solid #ffffff22;box-shadow:inset 0 1px 0 #ffffff30;transition:opacity .4s}
+.mode{font-size:11px;color:#ccc;padding:4px 8px;border-radius:8px;cursor:pointer;transition:.2s;font-weight:600}
+.mode.on{color:var(--y)}
+.shutter{width:54px;height:54px;border-radius:50%;border:3px solid #fff;display:grid;place-items:center;cursor:pointer;margin:6px 0}
+.shutter i{width:42px;height:42px;border-radius:50%;background:#fff;transition:.25s}
+.shutter.video i{background:#ff3b30}
+.shutter.rec i{width:20px;height:20px;border-radius:5px}
+.pad{width:56px;height:56px;border-radius:50%;background:#ffffff14;border:1px solid #ffffff22;position:relative}
+.pad b{position:absolute;width:18px;height:18px;border-radius:50%;background:var(--y);left:50%;top:50%;transform:translate(-50%,-50%);box-shadow:0 0 12px var(--y);transition:transform .1s}
+.recenter{font-size:10px;color:#bbb;cursor:pointer}
+.recenter:hover{color:var(--y)}
+.win.idle .bar,.win.idle .rail,.win.idle .hint{opacity:0}
+/* cards */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;margin-top:56px}
+.card{padding:28px;border-radius:22px;background:linear-gradient(160deg,rgba(255,255,255,.08),rgba(255,255,255,.02));border:1px solid var(--line);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);transition:.35s;position:relative;overflow:hidden}
+.card:hover{transform:translateY(-4px);border-color:#ffd60a66}
+.card:before{content:"";position:absolute;inset:0;background:radial-gradient(400px circle at var(--mx,50%) var(--my,0%),#ffd60a1c,transparent 40%);opacity:0;transition:.3s}
+.card:hover:before{opacity:1}
+.ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:#ffd60a1a;color:var(--y);margin-bottom:18px}
+.ic svg{width:24px;height:24px}
+.card h3{font-size:19px;margin-bottom:8px}
+.card p{color:var(--mute);font-size:15px}
+.badge{position:absolute;top:18px;right:18px;font-size:11px;padding:3px 9px;border-radius:99px;border:1px dashed var(--y);color:var(--y)}
+.card.big{grid-column:span 2}
+/* steps */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:56px;position:relative}
+.steps:before{content:"";position:absolute;top:44px;left:16%;right:16%;height:2px;background:linear-gradient(90deg,transparent,var(--y),transparent);opacity:.5}
+.step{text-align:center;padding:24px}
+.num{width:88px;height:88px;margin:0 auto 20px;border-radius:50%;display:grid;place-items:center;font-size:30px;font-weight:800;background:#0b0c12;border:1px solid #ffd60a66;color:var(--y);box-shadow:0 0 40px #ffd60a33;position:relative}
+.step p{color:var(--mute)}
+.req{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:40px}
+.req div{padding:22px;border-radius:18px;border:1px solid var(--line);background:var(--glass)}
+.req small{color:var(--mute);display:block;font-size:13px}
+.req strong{font-size:20px}
+.final{text-align:center;padding:90px 30px;border-radius:32px;border:1px solid #ffd60a44;background:radial-gradient(ellipse at top,#ffd60a22,transparent 60%),var(--glass)}
+footer{text-align:center;color:var(--mute);font-size:13px;padding:40px 5vw 60px}
+.reveal{opacity:0;transform:translateY(40px);transition:opacity .9s cubic-bezier(.2,.7,.2,1),transform .9s cubic-bezier(.2,.7,.2,1)}
+.reveal.in{opacity:1;transform:none}
+@media(max-width:760px){
+ h1{font-size:clamp(34px,10vw,56px)}
+ nav .links{display:none}
+ section{padding:80px 6vw}
+ .win{aspect-ratio:3/4;transform:none}
+ .frame{aspect-ratio:9/16;width:auto;height:100%}
+ .rail{right:8px;padding:10px 6px;gap:6px}
+ .mode{font-size:10px;padding:3px 5px}
+ .shutter{width:44px;height:44px}.shutter i{width:34px;height:34px}
+ .pad{width:44px;height:44px}
+ .status span:nth-child(3){display:none}
+ .steps{grid-template-columns:1fr}.steps:before{display:none}
+ .card.big{grid-column:auto}
+}
+@media(prefers-reduced-motion:reduce){
+ *,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+ .reveal{opacity:1;transform:none}
+ .win{transform:none}
+}
+</style>
+</head>
+<body>
+<div class="aurora"><i></i><i></i><i></i></div><div class="grain"></div>
+<nav>
+ <a class="logo" href="#"><b></b>PocketStudio</a>
+ <div class="links"><a href="#features">功能</a><a href="#how">工作原理</a><a href="#req">系统要求</a></div>
+ <a class="btn pri sm" href="https://github.com/zqqf16/PocketStudio" target="_blank" rel="noopener">GitHub</a>
+</nav>
+
+<section class="hero">
+ <span class="tag">开源 · 原生 macOS · Liquid Glass</span>
+ <h1>把 <em>Osmo Pocket 3</em><br>装进你的 Mac</h1>
+ <p class="sub">PocketStudio 是一款原生 macOS 应用，通过 Wi-Fi 在 Mac 上实时取景、拍摄、控制云台，并直接在电脑上录制预览画面。</p>
+ <div class="cta">
+  <a class="btn pri" href="https://github.com/zqqf16/PocketStudio" target="_blank" rel="noopener">★ 在 GitHub 上查看</a>
+  <a class="btn ghost" href="#demo">试试拖动云台 →</a>
+ </div>
+
+ <div class="stage" id="demo">
+  <div class="win" id="win">
+   <div class="bar"><i></i><i></i><i></i>
+    <div class="status"><span>🔋 82%</span><span>💾 41 GB</span><span id="att">P 0° · Y 0°</span></div>
+   </div>
+   <div class="view" id="view">
+    <div class="frame"><div class="scene" id="scene"><div class="stars"></div><div class="mtn"></div><div class="mtn b"></div></div><div class="grid3"></div></div>
+   </div>
+   <div class="rec" id="recTag" style="display:none">REC 00:00</div>
+   <div class="hint">🖱 在画面中拖动以控制云台</div>
+   <div class="rail">
+    <span class="mode" data-m="photo">拍照</span>
+    <span class="mode on" data-m="video">录像</span>
+    <span class="mode" data-m="slow">慢动作</span>
+    <span class="mode" data-m="tl">延时</span>
+    <div class="shutter video" id="shutter"><i></i></div>
+    <div class="pad"><b id="dot"></b></div>
+    <span class="recenter" id="recenter">回中</span>
+   </div>
+  </div>
+ </div>
+</section>
+
+<section id="features">
+ <div class="reveal center"><h2>像专业监视器一样，<br>却只是一个 App。</h2><p class="lead">为 Mac 原生打造：AppKit、Swift 6、macOS 26 Liquid Glass 设计语言。</p></div>
+ <div class="grid">
+  <div class="card big reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/></svg></div><h3>沉浸式全窗口实时取景</h3><p>类似 Netflix 的观看体验：鼠标静止时控件自动隐藏；画面自动适配真实视频比例，竖拍画面同样完美呈现。</p></div>
+  <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4" fill="currentColor"/></svg></div><h3>右侧竖向拍摄栏</h3><p>拍照 / 录像 / 慢动作 / 延时一键切换，统一的快门按钮。</p></div>
+  <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20"/><circle cx="12" cy="12" r="3"/></svg></div><h3>云台控制</h3><p>鼠标拖动即可转动云台，支持一键回中与云台模式切换。</p></div>
+  <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="#ff3b30" stroke="none"/></svg></div><h3>Mac 端直录</h3><p>直接在 Mac 上录制实时预览流，无需重新编码。</p></div>
+  <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="18" height="10" rx="2"/><path d="M22 11v2"/></svg></div><h3>状态一目了然</h3><p>状态栏实时显示电量、存储空间与姿态信息。</p></div>
+  <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg></div><h3>自动重连 + 视频看门狗</h3><p>连接断开自动恢复，视频流卡住时自动拉起。</p></div>
+  <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div><h3>新手友好引导</h3><p>一步步带你完成 macOS 本地网络与蓝牙权限设置。</p></div>
+  <div class="card reveal"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3"/></svg></div><h3>调试面板</h3><p>内置调试面板，便于排查连接与视频流问题。</p></div>
+  <div class="card reveal"><span class="badge">实验中</span><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7-6.5-4.5L5.5 20l2-7L2 9h7z"/></svg></div><h3>Pocket 4 / 4P 支持</h3><p>即将到来：支持 Osmo Pocket 4 / 4P 及 HEVC 实时取景。</p></div>
+ </div>
+</section>
+
+<section id="how">
+ <div class="reveal center"><h2>三步，开拍。</h2><p class="lead">蓝牙负责唤醒与配对，Wi-Fi 负责高速画面传输。</p></div>
+ <div class="steps">
+  <div class="step reveal"><div class="num">1</div><h3>BLE 唤醒</h3><p>通过蓝牙唤醒 Osmo Pocket 3 并完成配对。</p></div>
+  <div class="step reveal"><div class="num">2</div><h3>Wi-Fi 连接</h3><p>建立与相机的 Wi-Fi 链路，实时画面直达 Mac。</p></div>
+  <div class="step reveal"><div class="num">3</div><h3>开始拍摄</h3><p>切换模式、按下快门、拖动云台，或直接在 Mac 上录制。</p></div>
+ </div>
+</section>
+
+<section id="req">
+ <div class="reveal"><h2>系统要求</h2><p class="lead">原生、轻量，专为最新 macOS 打造。</p></div>
+ <div class="req reveal">
+  <div><small>操作系统</small><strong>macOS 26+</strong></div>
+  <div><small>相机</small><strong>DJI Osmo Pocket 3</strong></div>
+  <div><small>连接</small><strong>蓝牙 + Wi-Fi</strong></div>
+  <div><small>技术栈</small><strong>AppKit · Swift 6</strong></div>
+ </div>
+</section>
+
+<section>
+ <div class="final reveal">
+  <h2>开源，免费，就在 GitHub。</h2>
+  <p class="lead" style="margin:0 auto 32px">欢迎 Star、试用、提 Issue 或贡献代码。</p>
+  <div class="cta">
+   <a class="btn pri" href="https://github.com/zqqf16/PocketStudio" target="_blank" rel="noopener">前往 zqqf16/PocketStudio</a>
+   <a class="btn ghost" href="https://github.com/zqqf16/PocketStudio/issues" target="_blank" rel="noopener">反馈问题</a>
+  </div>
+ </div>
+</section>
+<footer>PocketStudio 是由 <a href="https://github.com/zqqf16" style="color:var(--y)">@zqqf16</a> 开发的开源项目，与 DJI 无官方关联。DJI 与 Osmo Pocket 为其各自所有者的商标。</footer>
+
+<script>
+(()=>{
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const $=s=>document.querySelector(s);
+// reveal
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.12});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+// card spotlight
+document.querySelectorAll('.card').forEach(c=>c.addEventListener('pointermove',e=>{const r=c.getBoundingClientRect();c.style.setProperty('--mx',e.clientX-r.left+'px');c.style.setProperty('--my',e.clientY-r.top+'px')}));
+// parallax tilt
+const win=$('#win');
+if(!RM){addEventListener('scroll',()=>{const r=win.getBoundingClientRect();const p=Math.max(0,Math.min(1,1-r.top/innerHeight));if(innerWidth>760)win.style.transform=`rotateX(${8-8*p}deg) scale(${.94+.06*p})`;document.querySelector('.aurora').style.transform=`translateY(${scrollY*-.08}px)`},{passive:true})}
+// gimbal drag
+let yaw=0,pitch=0,drag=null;
+const scene=$('#scene'),dot=$('#dot'),att=$('#att'),view=$('#view');
+function apply(){scene.style.transform=`translate(${-yaw*2}px,${pitch*2}px)`;dot.style.transform=`translate(calc(-50% + ${yaw/60*16}px),calc(-50% + ${-pitch/40*16}px))`;att.textContent=`P ${Math.round(pitch)}° · Y ${Math.round(yaw)}°`}
+view.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,yaw,pitch};view.setPointerCapture(e.pointerId)});
+view.addEventListener('pointermove',e=>{if(!drag)return;yaw=Math.max(-60,Math.min(60,drag.yaw-(e.clientX-drag.x)/4));pitch=Math.max(-40,Math.min(40,drag.pitch+(e.clientY-drag.y)/4));apply()});
+['pointerup','pointercancel'].forEach(t=>view.addEventListener(t,()=>drag=null));
+$('#recenter').addEventListener('click',()=>{scene.style.transition='transform .6s';yaw=pitch=0;apply();setTimeout(()=>scene.style.transition='',650)});
+// modes & shutter
+const sh=$('#shutter'),recTag=$('#recTag');let mode='video',rec=false,t0,tm;
+document.querySelectorAll('.mode').forEach(m=>m.addEventListener('click',()=>{if(rec)return;document.querySelectorAll('.mode').forEach(x=>x.classList.remove('on'));m.classList.add('on');mode=m.dataset.m;sh.className='shutter'+(mode==='photo'?'':' video')}));
+sh.addEventListener('click',()=>{if(mode==='photo'){win.animate([{filter:'brightness(3)'},{filter:'none'}],{duration:250});return}
+rec=!rec;sh.classList.toggle('rec',rec);recTag.style.display=rec?'flex':'none';
+if(rec){t0=Date.now();tm=setInterval(()=>{const s=Math.floor((Date.now()-t0)/1000);recTag.textContent=`REC ${String(s/60|0).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`},500)}else clearInterval(tm)});
+// auto-hide on idle
+let idle;const wake=()=>{win.classList.remove('idle');clearTimeout(idle);idle=setTimeout(()=>{if(!drag)win.classList.add('idle')},2500)};
+win.addEventListener('pointermove',wake);win.addEventListener('pointerleave',()=>win.classList.remove('idle'));
+})();
+</script>
+</body>
+</html>
