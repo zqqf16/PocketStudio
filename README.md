@@ -12,6 +12,8 @@
 >
 > 作者：[@zqqf16](https://github.com/zqqf16)
 
+Landing page: https://zqqf16.github.io/PocketStudio/
+
 ## 功能
 
 - 蓝牙唤醒相机 Wi-Fi，再加入热点并完成 UDP 握手
