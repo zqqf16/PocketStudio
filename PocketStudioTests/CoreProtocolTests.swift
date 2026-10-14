@@ -48,7 +48,17 @@ nonisolated final class CoreProtocolTests: XCTestCase {
         var bad = m; bad[20] ^= 1
         XCTAssertThrowsError(try DJIBLE.parse(bad))
         XCTAssertEqual(DJIBLE.identify(manufacturerData: [0xAA, 0x08, 0x20, 0x00, 0x01]).model, "OsmoPocket3")
+        XCTAssertEqual(DJIBLE.identify(manufacturerData: [0xAA, 0x08, 0x21, 0x00]).model, "OsmoPocket4")
+        XCTAssertEqual(DJIBLE.identify(manufacturerData: [0xAA, 0x08, 0x22, 0x00]).model, "OsmoPocket4P")
         XCTAssertFalse(DJIBLE.identify(manufacturerData: [0x4C, 0x00, 0x20, 0x00]).isDJI)
+        let osmo = DJIBLE.pairMessage(pin: DJIBLE.pairPINOsmo)
+        XCTAssertEqual(Array(osmo.payload.suffix(5)), [4] + Array("osmo".utf8))
+        XCTAssertEqual(try DJIBLE.parse(DJIBLE.build(osmo)), osmo)
+        XCTAssertEqual(DJIBLE.interpretPairReply(pin: "osmo", payload: [0x00, 0x01]), .alreadyPaired)
+        XCTAssertEqual(DJIBLE.interpretPairReply(pin: "osmo", payload: [0x00, 0x02]), .approveOnCamera)
+        XCTAssertEqual(DJIBLE.interpretPairReply(pin: "osmo", payload: [0x00, 0x06]), .notApproval)
+        XCTAssertEqual(DJIBLE.interpretPairReply(pin: "mbln", payload: [0x00, 0x06]), .approveOnCamera)
+        XCTAssertEqual(DJIBLE.interpretPairReply(pin: "mbln", payload: [0x00, 0x01]), .alreadyPaired)
         var r = DJIBLEReassembler()
         XCTAssertEqual(r.push(Array(m[0 ..< 20])).count, 0)
         XCTAssertEqual(r.push(Array(m[20...])), [m])
@@ -208,6 +218,117 @@ nonisolated final class CoreProtocolTests: XCTestCase {
             XCTAssertEqual(asm.sps, sps); XCTAssertEqual(asm.pps, pps)
             XCTAssertEqual(aus[1].avcc, [0, 0, 0, 5] + p1)
         }
+    }
+
+    func testDeviceProfileDetection() {
+        XCTAssertEqual(DeviceProfile.detect(manufacturerData: [0xAA, 0x08, 0x20, 0x00], localName: nil).model, .pocket3)
+        XCTAssertEqual(DeviceProfile.detect(manufacturerData: [0xAA, 0x08, 0x21, 0x00], localName: "OsmoPocket3-AAAA").model, .pocket4)
+        XCTAssertEqual(DeviceProfile.detect(manufacturerData: [0xAA, 0x08, 0x22, 0x00], localName: nil).model, .pocket4P)
+        XCTAssertEqual(DeviceProfile.detect(manufacturerData: [0xAA, 0x08, 0x20, 0x00], localName: nil).udpPort, 9004)
+        XCTAssertEqual(DeviceProfile.detect(manufacturerData: [0xAA, 0xF7, 0x22, 0x00], localName: nil).udpPort, 10004)
+        XCTAssertEqual(DeviceProfile.detect(manufacturerData: [0xAA, 0xF7, 0x22, 0x00], localName: nil).vendor, .xtra)
+        XCTAssertFalse(DeviceProfile.detect(manufacturerData: [0xAA, 0xF7, 0x22, 0x00], localName: nil).parsesSDCapacity)
+        let named = DeviceProfile.detect(manufacturerData: nil, localName: "OsmoPocket4P-AB12")
+        XCTAssertEqual(named.model, .pocket4P)
+        XCTAssertTrue(named.isDJI)
+        XCTAssertEqual(named.udpPort, 9004)
+        XCTAssertEqual(DeviceProfile.detect(manufacturerData: nil, localName: "Osmo Pocket 4 Pro").model, .pocket4P)
+        XCTAssertEqual(DeviceProfile.detect(manufacturerData: nil, localName: "OsmoPocket4-ZZZZ").model, .pocket4)
+        XCTAssertEqual(DeviceProfile.detect(manufacturerData: nil, localName: "OsmoPocket3-D6B1").model, .pocket3)
+        XCTAssertFalse(DeviceProfile.detect(manufacturerData: nil, localName: "iPhone").isDJI)
+        XCTAssertFalse(DeviceProfile.detect(manufacturerData: [0x4C, 0x00, 0x20, 0x00], localName: "Something").isDJI)
+        XCTAssertTrue(DeviceProfile.pocket3.parsesSDCapacity)
+        XCTAssertFalse(DeviceProfile.pocket4.parsesSDCapacity)
+        XCTAssertTrue(DeviceProfile.pocket4.hasInternalStorage)
+        XCTAssertEqual(DeviceProfile.pocket4.modeTable.wireID(for: .photo), 0x05)
+        XCTAssertEqual(DeviceProfile.pocket4P.modeTable.wireID(for: .photo), 0x17)
+        XCTAssertEqual(DeviceProfile.pocket4P.modeTable.wireID(for: .livePhoto), 0x4D)
+        XCTAssertEqual(DeviceProfile.pocket3.modeTable.wireID(for: .photo), 0x05)
+        XCTAssertNil(DeviceProfile.pocket3.modeTable.wireID(for: .livePhoto))
+        XCTAssertEqual(Shutter.segments(for: .pocket3), [.slowMotion, .video, .photo, .timelapse])
+        XCTAssertEqual(Shutter.segments(for: .pocket4P), [.slowMotion, .video, .photo, .livePhoto, .timelapse])
+        XCTAssertEqual(DeviceProfile.pocket4.documentedPreviewCodec, .hevc)
+        XCTAssertEqual(DeviceProfile.pocket3.documentedPreviewCodec, .h264)
+    }
+
+    func testCodecHintDoesNotLatchOnAmbiguousHeaders() {
+        XCTAssertEqual(VideoCodec.hint(nalHeader: 0x40), .hevc)
+        XCTAssertEqual(VideoCodec.hint(nalHeader: 0x42), .hevc)
+        XCTAssertEqual(VideoCodec.hint(nalHeader: 0x44), .hevc)
+        XCTAssertEqual(VideoCodec.hint(nalHeader: 0x67), .h264)
+        XCTAssertEqual(VideoCodec.hint(nalHeader: 0x68), .h264)
+        XCTAssertNil(VideoCodec.hint(nalHeader: 0x28))
+        XCTAssertNil(VideoCodec.hint(nalHeader: 0x41))
+        XCTAssertNil(VideoCodec.hint(nalHeader: 0x20))
+        XCTAssertTrue(HEVCNALType.isIRAP(16))
+        XCTAssertTrue(HEVCNALType.isIRAP(20))
+        XCTAssertTrue(HEVCNALType.isIRAP(21))
+        XCTAssertFalse(HEVCNALType.isIRAP(1))
+        XCTAssertEqual(HEVCNALType.of([0x20, 0x01]), 16)
+        XCTAssertEqual(HEVCNALType.of([0x28, 0x01]), 20)
+    }
+
+    func testHEVCAccessUnitTreatsIRAPAsKeyframe() {
+        var asm = H264AccessUnitAssembler()
+        XCTAssertEqual(asm.push([0x28, 0x01, 0x00]), [])
+        XCTAssertNil(asm.codec)
+        XCTAssertNil(asm.pps)
+        XCTAssertEqual(asm.push([0x41, 0x9A, 0x80]), [], "H.264 P 片首字节不得当成 HEVC VPS")
+        let vps: Bytes = [0x40, 0x01, 0x0C]
+        let sps: Bytes = [0x42, 0x01, 0x01]
+        let pps: Bytes = [0x44, 0x01, 0xC1]
+        let bla: Bytes = [0x20, 0x01, 0x80, 0x11]
+        let trail: Bytes = [0x02, 0x01, 0x80, 0x22]
+        let aud: Bytes = [0x46, 0x01]
+        var aus: [H264AccessUnit] = []
+        for nal in [vps, sps, pps, bla, trail, aud] { aus += asm.push(nal) }
+        XCTAssertEqual(asm.codec, .hevc)
+        XCTAssertEqual(asm.vps, vps)
+        XCTAssertEqual(asm.sps, sps)
+        XCTAssertEqual(asm.pps, pps)
+        XCTAssertEqual(aus.count, 2)
+        XCTAssertTrue(aus[0].isKeyframe)
+        XCTAssertEqual(aus[0].codec, .hevc)
+        XCTAssertFalse(aus[1].isKeyframe)
+        XCTAssertEqual(aus[0].nals, [bla])
+    }
+
+    func testLiveViewFrameHeaderStrippedOnlyWhenPresent() {
+        let payload: Bytes = [0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0x0C, 0x01]
+        var header = Bytes([0x00, 0x00, 0x01, 0xFF])
+        header.appendLE32(UInt32(payload.count))
+        header += Bytes(repeating: 0xAB, count: 8)
+        XCTAssertEqual(header.count, 16)
+        var framed = DJILiveViewDeframer()
+        let whole = framed.push(header + payload)
+        XCTAssertTrue(whole.resetParser)
+        XCTAssertTrue(framed.usesFrameHeader)
+        XCTAssertEqual(whole.bytes, payload)
+        XCTAssertEqual(framed.frames, 1)
+
+        var split = DJILiveViewDeframer()
+        let all = header + payload + header + payload
+        let first = split.push(Array(all.prefix(3)))
+        XCTAssertFalse(split.usesFrameHeader)
+        XCTAssertTrue(first.bytes.isEmpty)
+        let rest = split.push(Array(all.dropFirst(3)))
+        XCTAssertTrue(split.usesFrameHeader)
+        XCTAssertEqual(rest.bytes, payload + payload)
+        XCTAssertEqual(split.frames, 2)
+
+        let annex: Bytes = [0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1F, 0, 0, 0, 1, 0x68, 0xCE, 0x38, 0x80]
+        var raw = DJILiveViewDeframer()
+        var got = Bytes()
+        for byte in annex { got += raw.push([byte]).bytes }
+        got += raw.flush()
+        XCTAssertEqual(got, annex)
+        XCTAssertFalse(raw.usesFrameHeader)
+
+        var bogus = DJILiveViewDeframer()
+        let huge = Bytes([0x00, 0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F]) + annex
+        let passed = bogus.push(huge)
+        XCTAssertFalse(bogus.usesFrameHeader)
+        XCTAssertEqual(passed.bytes + bogus.flush(), huge)
     }
 
     func testHexParsing() {

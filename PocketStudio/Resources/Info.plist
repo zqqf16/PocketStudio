@@ -33,7 +33,7 @@
 	<key>NSSupportsAutomaticTermination</key>
 	<false/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>PocketStudio 需要使用蓝牙来发现并唤醒你的 DJI Osmo Pocket 3，让相机开启 Wi-Fi 热点。</string>
+	<string>PocketStudio 需要使用蓝牙来发现并唤醒你的 DJI Osmo Pocket（Pocket 3、Pocket 4 或 Pocket 4P），让相机开启 Wi-Fi 热点。</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>PocketStudio 需要访问本地网络，才能与相机（192.168.2.1）通信并接收实时画面。</string>
 	<key>NSBonjourServices</key>

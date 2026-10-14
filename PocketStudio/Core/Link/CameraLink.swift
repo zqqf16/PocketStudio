@@ -56,7 +56,9 @@ nonisolated public final class CameraLink: @unchecked Sendable {
     public var legacyAttitudeLayout = false
     /// 相机/云台对我们 request 的应答（flags 0x80/0xC0；queue 上回调）
     public var onReply: (@Sendable (DUMLPacket) -> Void)?
-    /// H.264 片段（queue 上回调）
+    /// 机型。只在 `queue` 上读。决定模式号和 0x80 存储字段是否按 SD 卡解析。
+    public let profile: DeviceProfile
+    /// 视频片段（queue 上回调）。Pocket 3 为 H.264 Annex-B；4/4P 可能是 HEVC，由管线自动判断。
     public var onVideo: (@Sendable (Bytes) -> Void)?
     /// 所有 DUML（queue 上回调）
     public var onDUML: (@Sendable (DUMLPacket, DUMLDirection) -> Void)?
@@ -64,8 +66,9 @@ nonisolated public final class CameraLink: @unchecked Sendable {
     public var onSnapshot: (@Sendable (LinkSnapshot) -> Void)?
     public var onError: (@Sendable (String) -> Void)?
 
-    public init(host: String = DJIUDPFrame.cameraIP, port: UInt16 = DJIUDPFrame.cameraPort, transport: DatagramTransport) {
-        self.host = host; self.port = port; self.transport = transport
+    public init(host: String = DJIUDPFrame.cameraIP, port: UInt16 = DJIUDPFrame.cameraPort, transport: DatagramTransport, profile: DeviceProfile = .pocket3) {
+        self.host = host; self.port = port; self.transport = transport; self.profile = profile
+        snapshotState.camera.profile = profile
         core = DJISessionCore { [weak self] b in self?.transport.send(b) }
         core.onVideo = { [weak self] b in
             guard let self else { return }
@@ -78,7 +81,7 @@ nonisolated public final class CameraLink: @unchecked Sendable {
 
     private func handleDUML(_ p: DUMLPacket, _ d: DUMLDirection) {
         if d == .rx {
-            if snapshotState.camera.apply(p) { dirty = true }
+            if snapshotState.camera.apply(p, profile: profile) { dirty = true }
             else if p.cmdSet == DUMLCmdSet.gimbal, p.cmdID == GimbalProtocol.cmdAttitude {
                 snapshotState.gimbal.update(payload: p.payload, legacyLayout: legacyAttitudeLayout); dirty = true
                 core.noteGimbalAttitude()
@@ -257,7 +260,12 @@ nonisolated public final class CameraLink: @unchecked Sendable {
             completion?(start, st.mode)
         }
     }
-    public func setMode(_ m: CameraMode) { send(CameraCommand.setMode(m)) }
+    public func setMode(_ m: CameraMode) {
+        queue.async { [self] in
+            guard let spec = CameraCommand.setMode(m, profile: profile) else { return }
+            send(spec)
+        }
+    }
 
     public func sendRaw(cmdSet: UInt8, cmdID: UInt8, payload: Bytes, receiverType: UInt8 = 1, receiverID: UInt8 = 0, cmdType: UInt8 = DUMLCmdType.request) {
         send(CameraCommand.Spec(receiverType: receiverType, receiverID: receiverID, cmdSet: cmdSet, cmdID: cmdID, payload: payload, cmdType: cmdType))

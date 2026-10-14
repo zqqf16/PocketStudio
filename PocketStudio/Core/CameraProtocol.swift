@@ -6,11 +6,14 @@
 //  Camera:0xA0 (28B)        状态：offset 6 LE16=录制秒数
 //  ESC:0x02    (34B, ~1Hz)  电池：offset 1 LE16=毫伏，offset 20=电量百分比
 
-/// 拍摄模式 = 0x02/0xE1 的线上取值，也是 Camera:0x80 状态 @57 字节（OpenPocketCine Pocket 3 实机抓包）。
+/// 拍摄模式的语义名。线上字节（0x02/0xE1 与 Camera:0x80 @57）由 `DeviceProfile.modeTable` 决定，
+/// 不再把 `rawValue` 当作所有机型共用的模式号。
 /// ⚠️ 不要枚举/扫描其它取值：OpenPocketCine 报告扫描 0xE1 曾把 Nano 卡死需重启。
-nonisolated public enum CameraMode: UInt8, CaseIterable, Sendable, Identifiable {
+/// `rawValue` 只作稳定标识：Pocket 3 的取值与旧版一致；`livePhoto` 的 0x4D 仅在 Pocket 4P 的模式表里启用。
+nonisolated public enum CameraMode: UInt8, CaseIterable, Sendable, Identifiable, Hashable {
     case slowMotion = 0x00, video = 0x01, timelapse = 0x02, photo = 0x05
     case hyperlapse = 0x0A, panorama = 0x0C, lowLight = 0x28
+    case livePhoto = 0x4D
     public var id: UInt8 { rawValue }
 
     /// M 键 / 菜单可切换的模式
@@ -20,33 +23,179 @@ nonisolated public enum CameraMode: UInt8, CaseIterable, Sendable, Identifiable 
         switch self {
         case .photo: return "Photo"; case .video: return "Video"; case .slowMotion: return "SlowMo"
         case .timelapse: return "Timelapse"; case .hyperlapse: return "Hyperlapse"; case .panorama: return "Panorama"
-        case .lowLight: return "LowLight"
+        case .lowLight: return "LowLight"; case .livePhoto: return "LivePhoto"
         }
     }
     public var displayName: String {
         switch self {
         case .photo: return "拍照"; case .video: return "录像"; case .slowMotion: return "慢动作"
         case .timelapse: return "延时摄影"; case .hyperlapse: return "移动延时"; case .panorama: return "全景"
-        case .lowLight: return "夜景录像"
+        case .lowLight: return "夜景录像"; case .livePhoto: return "实况照片"
         }
     }
     public var symbol: String {
         switch self {
         case .photo: return "camera"; case .video: return "video"; case .slowMotion: return "tortoise"
         case .timelapse, .hyperlapse: return "timelapse"; case .panorama: return "pano"; case .lowLight: return "moon"
+        case .livePhoto: return "livephoto"
         }
     }
-    /// 拍照类模式：快门 = 0x02/0x01 [01]
+    /// 拍照类模式：快门 = 0x02/0x01 [01]（Pocket 4P 实况照片同样走 0x01，OpenPocketCine）
     /// 侧栏短标签
     public var shortName: String {
         switch self {
         case .slowMotion: return "慢动作"; case .video: return "录像"; case .photo: return "拍照"; case .timelapse: return "延时"
+        case .livePhoto: return "实况"
         default: return displayName
         }
     }
-    public var isStill: Bool { self == .photo || self == .panorama }
+    public var isStill: Bool { self == .photo || self == .panorama || self == .livePhoto }
     /// Pocket 3 延时摄影的开始/停止走 0x02/0x01 [01]/[00]，而不是录像的 0x02/0x02
     public var usesShutterForRecording: Bool { self == .timelapse || self == .hyperlapse }
+}
+
+/// 0x02/0xE1 的已知取值。没有登记的模式不会发送——禁止扫描未知枚举。
+nonisolated public struct ShootingModeTable: Sendable, Equatable {
+    public var wire: [CameraMode: UInt8]
+    public init(wire: [CameraMode: UInt8]) { self.wire = wire }
+
+    public func wireID(for mode: CameraMode) -> UInt8? { wire[mode] }
+
+    public func mode(forWire id: UInt8) -> CameraMode? {
+        for (mode, value) in wire where value == id { return mode }
+        return nil
+    }
+
+    /// 侧栏顺序。实况照片只在表里有取值时出现。
+    public var switchable: [CameraMode] {
+        var list: [CameraMode] = [.slowMotion, .video, .photo]
+        if wire[.livePhoto] != nil { list.append(.livePhoto) }
+        list.append(.timelapse)
+        return list.filter { wire[$0] != nil }
+    }
+
+    /// Pocket 3 实机：慢动作 00、录像 01、延时 02、拍照 05，以及已有的移动延时 / 全景 / 夜景。
+    public static let pocket3 = ShootingModeTable(wire: [
+        .slowMotion: 0x00, .video: 0x01, .timelapse: 0x02, .photo: 0x05,
+        .hyperlapse: 0x0A, .panorama: 0x0C, .lowLight: 0x28,
+    ])
+
+    /// Pocket 4 的 0xE1 取值没有公开抓包。复用 Pocket 3，不另猜、不扫描。
+    public static let pocket4 = pocket3
+
+    /// Pocket 4P：拍照 0x17、实况照片 0x4D、慢动作 0x00（OpenPocketCine 调查）。
+    /// 录像 / 延时 / 移动延时 / 全景 / 夜景没有单独的公开取值，暂用 Pocket 3，标为未验证。
+    public static let pocket4P = ShootingModeTable(wire: [
+        .slowMotion: 0x00, .video: 0x01, .timelapse: 0x02, .photo: 0x17,
+        .livePhoto: 0x4D,
+        .hyperlapse: 0x0A, .panorama: 0x0C, .lowLight: 0x28,
+    ])
+}
+
+/// Pocket 4P 的 SuperPhoto 不是另一个 0xE1 模式（OpenPocketCine P01）。
+/// 它留在拍照模式 0x17 内，用 0x02/0x12 选择标准/超清与画幅；超清快门载荷是 0x0F。
+/// TODO: 本应用尚未实机确认，不发送 0x12，也不把它做成可切换的 0xE1 值。
+nonisolated public enum Pocket4PSuperPhoto {
+    public static let formatCommand: UInt8 = 0x12
+    public static let standard16x9: Bytes = [0x00, 0x01]
+    public static let superPhoto16x9: Bytes = [0x04, 0x01]
+    public static let superPhoto1x1: Bytes = [0x04, 0x03]
+    public static let shutter: Bytes = [0x0F]
+}
+
+/// 连接时确定的机型。模式号、UDP 端口、存储字段是否按 SD 卡解析、界面名称都从这里来。
+/// 预览编码不在这里写死：H.264 / HEVC 以码流参数集为准（见 `VideoCodec`）。
+nonisolated public struct DeviceProfile: Sendable, Equatable {
+    public var model: PocketModel
+    public var isDJI: Bool
+    public var vendor: BLEVendor
+    public var displayName: String
+    public var udpPort: UInt16
+    /// Pocket 3 的 0x80 @5/@9、0xDC @6/@10 是 SD 卡 MiB。
+    /// Pocket 4 / 4P 有机内存储，同一偏移未确认，打开会显示垃圾容量。
+    public var parsesSDCapacity: Bool
+    public var hasInternalStorage: Bool
+    public var modeTable: ShootingModeTable
+    /// 公开资料中的预览编码。解码器仍等参数集，不用这个字段去锁编码。
+    public var documentedPreviewCodec: VideoCodec
+    /// 模式号是否整表沿用 Pocket 3（Pocket 4 为真；4P 只有拍照 / 实况 / 慢动作有公开值）。
+    public var modeIDsUnverified: Bool
+
+    public var isPocketSeries: Bool { model != .unknown }
+
+    public static let pocket3 = DeviceProfile(
+        model: .pocket3, isDJI: true, vendor: .dji, displayName: "Osmo Pocket 3",
+        udpPort: DJIUDPFrame.cameraPort, parsesSDCapacity: true, hasInternalStorage: false,
+        modeTable: .pocket3, documentedPreviewCodec: .h264, modeIDsUnverified: false)
+
+    public static let pocket4 = DeviceProfile(
+        model: .pocket4, isDJI: true, vendor: .dji, displayName: "Osmo Pocket 4",
+        udpPort: DJIUDPFrame.cameraPort, parsesSDCapacity: false, hasInternalStorage: true,
+        modeTable: .pocket4, documentedPreviewCodec: .hevc, modeIDsUnverified: true)
+
+    public static let pocket4P = DeviceProfile(
+        model: .pocket4P, isDJI: true, vendor: .dji, displayName: "Osmo Pocket 4P",
+        udpPort: DJIUDPFrame.cameraPort, parsesSDCapacity: false, hasInternalStorage: true,
+        modeTable: .pocket4P, documentedPreviewCodec: .hevc, modeIDsUnverified: true)
+
+    /// 还没识别到机型。模式号与 SD 解析保持 Pocket 3，这样「跳过蓝牙」的 Pocket 3 行为不变。
+    public static let unidentified = DeviceProfile(
+        model: .unknown, isDJI: false, vendor: .none, displayName: "Osmo Pocket",
+        udpPort: DJIUDPFrame.cameraPort, parsesSDCapacity: true, hasInternalStorage: false,
+        modeTable: .pocket3, documentedPreviewCodec: .h264, modeIDsUnverified: true)
+
+    public static func detect(manufacturerData: Bytes?, localName: String?) -> DeviceProfile {
+        var vendor: BLEVendor = .none
+        var modelByte: UInt8?
+        if let raw = manufacturerData, raw.count >= 2 {
+            let cid = Array(raw.prefix(2))
+            if cid == DJIBLE.djiCompanyID { vendor = .dji }
+            else if cid == DJIBLE.xtraCompanyID { vendor = .xtra }
+            if vendor != .none, raw.count >= 3 { modelByte = raw[2] }
+        }
+        let named = model(fromAdvertisedName: localName)
+        let model: PocketModel
+        switch modelByte {
+        case 0x20: model = .pocket3
+        case 0x21: model = .pocket4
+        case 0x22: model = .pocket4P
+        default: model = named
+        }
+        let recognized = vendor != .none || model != .unknown
+        guard recognized else { return .unidentified }
+        var profile: DeviceProfile
+        switch model {
+        case .pocket3: profile = .pocket3
+        case .pocket4: profile = .pocket4
+        case .pocket4P: profile = .pocket4P
+        case .unknown:
+            profile = .unidentified
+            profile.isDJI = true
+            profile.displayName = "Osmo Pocket"
+        }
+        if vendor != .none { profile.vendor = vendor }
+        profile.udpPort = profile.vendor == .xtra ? DJIUDPFrame.xtraPort : DJIUDPFrame.cameraPort
+        profile.isDJI = true
+        return profile
+    }
+
+    /// 广播名 / Wi-Fi 名。先匹配 4P / 4 Pro，再匹配 4，最后 3。
+    public static func model(fromAdvertisedName name: String?) -> PocketModel {
+        guard let name else { return .unknown }
+        let n = name.lowercased().filter { $0.isLetter || $0.isNumber }
+        if n.contains("pocket4p") || n.contains("pocket4pro") { return .pocket4P }
+        if n.contains("pocket4") { return .pocket4 }
+        if n.contains("pocket3") { return .pocket3 }
+        return .unknown
+    }
+}
+
+nonisolated public enum PocketModel: String, Sendable, Equatable {
+    case pocket3, pocket4, pocket4P, unknown
+}
+
+nonisolated public enum BLEVendor: String, Sendable, Equatable {
+    case dji, xtra, none
 }
 
 nonisolated public struct CameraStatus: Equatable, Sendable {
@@ -59,6 +208,8 @@ nonisolated public struct CameraStatus: Equatable, Sendable {
     public var photoCount = 0        // 原项目亦未解析，保留字段
     public var batteryPercent = -1
     public var batteryMilliVolt = 0
+    /// 解析 0x80 / 0xDC 时用的机型。默认 Pocket 3，现有日志字节的单测不变。
+    public var profile: DeviceProfile = .pocket3
     public var raw80: Bytes = []
     public var rawDC: Bytes = []
     public var rawBattery: Bytes = []
@@ -75,52 +226,62 @@ nonisolated public struct CameraStatus: Equatable, Sendable {
 
     public init() {}
 
-    public var mode: CameraMode? { modeRaw.flatMap(CameraMode.init(rawValue:)) }
+    public var mode: CameraMode? { modeRaw.flatMap { profile.modeTable.mode(forWire: $0) } }
     public var modeName: String {
         guard let m = modeRaw else { return "未知" }
-        return CameraMode(rawValue: m)?.displayName ?? "模式\(m)"
+        if let known = profile.modeTable.mode(forWire: m) { return known.displayName }
+        return String(format: "模式 0x%02X", m)
     }
 
     /// 与原项目 summary() 一致的英文摘要（日志用）
     public var summary: String {
-        var parts = ["Mode=\(modeRaw.map { CameraMode(rawValue: $0)?.englishName ?? "Mode\($0)" } ?? "Unknown")"]
+        var parts = ["Mode=\(modeRaw.map { profile.modeTable.mode(forWire: $0)?.englishName ?? String(format: "Mode%02X", $0) } ?? "Unknown")"]
         if recording { parts.append("REC \(recordingTimeS)s") }
         if batteryPercent >= 0 { parts.append("Bat=\(batteryPercent)%") }
-        if sdInserted { parts.append("SD=\(sdFreeMB)MB free") }
+        if profile.parsesSDCapacity, sdInserted { parts.append("SD=\(sdFreeMB)MB free") }
+        else if profile.hasInternalStorage { parts.append("Internal") }
         return parts.joined(separator: " | ")
     }
 
-    /// 应用一条 DUML 包；返回是否被识别。
+    /// 应用一条 DUML 包；返回是否被识别。`profile` 非空时改用该机型的存储/模式表。
     @discardableResult
-    public mutating func apply(_ pkt: DUMLPacket) -> Bool {
+    public mutating func apply(_ pkt: DUMLPacket, profile: DeviceProfile? = nil) -> Bool {
+        if let profile { self.profile = profile }
         let p = pkt.payload
         switch (pkt.cmdSet, pkt.cmdID) {
         case (2, 0x80):
             // OpenPocketCine CameraStatus.swift：u32 flags @0，bit7 = 录制中；@5/@9 存储总量/剩余 MiB；
             // @29 u16 = 已录制秒数；@57 = 拍摄模式（0xE1 取值）。
             // 原 Python 用 byte0 低 4 位当模式、byte1 bit0 当录制状态 —— 实机日志 01 02 80 00 … 证明不对。
+            // Pocket 4/4P 有机内存储，@5/@9 是否仍是 SD 卡未确认，机型不允许解析时不写入容量。
             guard p.count >= 13 else { return false }
             raw80 = p
             recording = (p[0] & 0x80) != 0
             stateFlags = p.le32(0)
             if p.count >= 31 { recordingTimeS = Int(p.le16(29)) }
             modeRaw = p.count >= 58 ? p[57] : nil
-            let total = Int(p.le32(5)), free = Int(p.le32(9))
-            if (1 ... 50_000_000).contains(total) { sdTotalMB = total; sdInserted = true }
-            if (0 ... 50_000_000).contains(free) { sdFreeMB = free }
+            if self.profile.parsesSDCapacity {
+                let total = Int(p.le32(5)), free = Int(p.le32(9))
+                if (1 ... 50_000_000).contains(total) { sdTotalMB = total; sdInserted = true }
+                if (0 ... 50_000_000).contains(free) { sdFreeMB = free }
+            } else {
+                sdInserted = false; sdTotalMB = 0; sdFreeMB = 0
+            }
             hasCameraStatus = true
             return true
         case (2, 0x82):
             playbackPushes += 1
             return true
         case (2, 0xDC):
-            // [total][free] u32 MiB：SD @6/@10
+            // [total][free] u32 MiB：Pocket 3 上 SD @6/@10。4/4P 不把这些字节当成 SD 卡。
             guard p.count >= 14 else { return false }
             rawDC = p
-            let total = Int(p.le32(6))
-            sdInserted = total > 0
-            if total > 0 { sdTotalMB = total; sdFreeMB = Int(p.le32(10)) }
-            hasStorageStatus = true
+            if self.profile.parsesSDCapacity {
+                let total = Int(p.le32(6))
+                sdInserted = total > 0
+                if total > 0 { sdTotalMB = total; sdFreeMB = Int(p.le32(10)) }
+                hasStorageStatus = true
+            }
             return true
         case (13, 0x02):
             guard p.count >= 3 else { return false }
@@ -158,8 +319,11 @@ nonisolated public enum CameraCommand {
     public static let stopRecording = Spec(cmdID: 0x02, payload: [0x00])
     /// 延时摄影开始/停止：0x02/0x01 [01]/[00]
     public static let shutterStop = Spec(cmdID: 0x01, payload: [0x00])
-    /// 拍摄模式：0x02/0xE1 [mode]
-    public static func setMode(_ mode: CameraMode) -> Spec { Spec(cmdID: 0xE1, payload: [mode.rawValue]) }
+    /// 拍摄模式：0x02/0xE1 [mode]。表里没有的模式返回 nil，调用方不得改发其它字节。
+    public static func setMode(_ mode: CameraMode, profile: DeviceProfile = .pocket3) -> Spec? {
+        guard let id = profile.modeTable.wireID(for: mode) else { return nil }
+        return Spec(cmdID: 0xE1, payload: [id])
+    }
 
     /// 退出回放：0x02/0x0C 01 01 00 00（OPC exitPlayback；进入为 …01）
     public static let exitPlayback = Spec(cmdID: 0x0C, payload: [0x01, 0x01, 0x00, 0x00])

@@ -14,8 +14,9 @@ nonisolated public enum ShutterStyle: Equatable, Sendable {
 }
 
 nonisolated public enum Shutter {
-    /// 分段控件顺序（与 iOS 相机相同从左到右）
-    public static let segments: [CameraMode] = [.slowMotion, .video, .photo, .timelapse]
+    /// 分段控件顺序（与 iOS 相机相同从左到右）。实况照片只在机型模式表里有取值时出现。
+    public static func segments(for profile: DeviceProfile) -> [CameraMode] { profile.modeTable.switchable }
+    public static let segments: [CameraMode] = DeviceProfile.pocket3.modeTable.switchable
 
     public static func action(mode: CameraMode?, recording: Bool) -> ShutterAction {
         if recording { return .stopRecording }

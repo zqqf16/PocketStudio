@@ -43,8 +43,13 @@ nonisolated public enum DJIBLE {
         [0x17, 0x00]: "Osmo360",
         [0x18, 0x00]: "OsmoAction6",
         [0x20, 0x00]: "OsmoPocket3",
+        // 0x21 / 0x22 来自 OpenPocketCine 型号表，本应用尚未在实机上确认。
+        [0x21, 0x00]: "OsmoPocket4",
+        [0x22, 0x00]: "OsmoPocket4P",
     ]
     public static let pocket3Model = "OsmoPocket3"
+    public static let pocket4Model = "OsmoPocket4"
+    public static let pocket4PModel = "OsmoPocket4P"
 
     // 事务 ID / 目标 / 类型（来自 Moblin）
     public static let pairID: UInt16 = 0x8092, pairTarget: UInt16 = 0x0702, pairType: UInt32 = 0x450740
@@ -62,6 +67,8 @@ nonisolated public enum DJIBLE {
         0x33,
     ]
     public static let pairPIN = "mbln"
+    /// OpenPocketCine 的 SetPairingPIN。mbln 超时后再试。
+    public static let pairPINOsmo = "osmo"
 
     public static func packString(_ s: String) -> Bytes {
         let d = Array(s.utf8)
@@ -92,7 +99,23 @@ nonisolated public enum DJIBLE {
         return DJIBLEMessage(target: d.le16(4), id: d.le16(6), type: type, payload: Array(d[11 ..< length - 2]))
     }
 
-    /// 解析广播中的厂商数据（CoreBluetooth 的 kCBAdvDataManufacturerData 已包含 2 字节厂商 ID）
+    /// 配对应答。osmo：00 01 已配对、00 02 请在相机上点允许，都算成功；00 06 不是屏幕确认。
+    /// mbln：保持 Pocket 3 的旧行为——任何应答都继续连接，只有 00 01 记成「已经配对」。
+    public enum PairPINReply: Equatable, Sendable {
+        case alreadyPaired, approveOnCamera, notApproval
+    }
+
+    public static func interpretPairReply(pin: String, payload: Bytes) -> PairPINReply {
+        if pin == pairPINOsmo {
+            if payload == [0x00, 0x01] { return .alreadyPaired }
+            if payload == [0x00, 0x02] { return .approveOnCamera }
+            return .notApproval
+        }
+        if payload == [0x00, 0x01] { return .alreadyPaired }
+        return .approveOnCamera
+    }
+
+    /// 解析广播中的厂商数据（CoreBluetooth 的 kCBAdvDataManufacturerData 已包含 2 字节厂商 ID，小端 0x08AA / 0xF7AA）
     public static func identify(manufacturerData full: Bytes) -> (isDJI: Bool, model: String?) {
         guard full.count >= 4 else { return (false, nil) }
         let cid = Array(full[0 ..< 2])
@@ -102,9 +125,10 @@ nonisolated public enum DJIBLE {
 
     // MARK: 负载构造
 
-    public static var pairMessage: DJIBLEMessage {
-        DJIBLEMessage(target: pairTarget, id: pairID, type: pairType, payload: pairHash + packString(pairPIN))
+    public static func pairMessage(pin: String) -> DJIBLEMessage {
+        DJIBLEMessage(target: pairTarget, id: pairID, type: pairType, payload: pairHash + packString(pin))
     }
+    public static var pairMessage: DJIBLEMessage { pairMessage(pin: pairPIN) }
     public static var stopStreamingMessage: DJIBLEMessage {
         DJIBLEMessage(target: stopStreamTarget, id: stopStreamID, type: stopStreamType, payload: [0x01, 0x01, 0x1A, 0x00, 0x01, 0x02])
     }
@@ -165,9 +189,10 @@ nonisolated public struct DJIBLEReassembler {
 /// 关闭它会让相机 RST）。载荷与 BLE 配对相同（同一 identifier + PIN），这样相机视为已配对的同一个 App。
 nonisolated public enum DJITCPPoke {
     public static let port: UInt16 = 7001
-    public static var frame: Bytes {
+    public static func frame(pin: String = DJIBLE.pairPIN) -> Bytes {
         DUML.build(senderType: DUMLDevice.app, senderID: 0, receiverType: 0x07, receiverID: 0,
-                   cmdSet: 0x07, cmdID: 0x45, payload: DJIBLE.pairHash + DJIBLE.packString(DJIBLE.pairPIN),
+                   cmdSet: 0x07, cmdID: 0x45, payload: DJIBLE.pairHash + DJIBLE.packString(pin),
                    seq: 0x8092, cmdType: DUMLCmdType.request)
     }
+    public static var frame: Bytes { frame() }
 }

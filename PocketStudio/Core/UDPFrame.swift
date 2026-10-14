@@ -28,6 +28,8 @@ nonisolated public struct DJIUDPHeader: Equatable, Sendable {
 nonisolated public enum DJIUDPFrame {
     public static let cameraIP = "192.168.2.1"
     public static let cameraPort: UInt16 = 9004
+    /// Xtra 改标（厂商 ID 0xF7AA）用的 UDP 端口。OpenPocketCine，本应用未实机确认。
+    public static let xtraPort: UInt16 = 10004
 
     /// 16 位回绕序号比较：new 是否在 old 之后
     public static func seqAhead(_ new: UInt16, _ old: UInt16) -> Bool {

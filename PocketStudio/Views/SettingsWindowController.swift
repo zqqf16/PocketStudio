@@ -58,7 +58,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
 
         let grid = NSGridView(views: [
             [UI.headline("相机"), NSGridCell.emptyContentView],
-            [UI.label("Wi-Fi 名称"), field(ssid, 260, "例如 OsmoPocket3-D6B1")],
+            [UI.label("Wi-Fi 名称"), field(ssid, 260, "例如 OsmoPocket3-D6B1 或 OsmoPocket4P-XXXX")],
             [UI.label("Wi-Fi 密码"), pwStack],
             [UI.label("相机 IP"), field(ip, 140)],
             [UI.label("蓝牙扫描（秒）"), field(bleTimeout, 60)],

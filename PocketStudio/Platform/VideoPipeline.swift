@@ -34,9 +34,11 @@ nonisolated struct VideoHealth: Sendable {
 nonisolated final class VideoPipeline: @unchecked Sendable {
     let queue = DispatchQueue(label: "pocketstudio.video", qos: .userInteractive)
     let recQueue = DispatchQueue(label: "pocketstudio.record", qos: .utility)
+    private var deframer = DJILiveViewDeframer()
     private var parser = AnnexBParser()
     private var assembler = H264AccessUnitAssembler()
     private let decoder = H264Decoder()
+    private var loggedNoFrameHeader = false
     private var recorder: StreamRecorder?          // 引用只在 queue 上改；写入只在 recQueue 上发生
     private var frameTimes: [TimeInterval] = []
     private var bytesWindow: [(TimeInterval, Int)] = []
@@ -57,6 +59,8 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
     private let lock = NSLock()
     private var _health = VideoHealth()
     private var _stats = Stats(fps: 0, kbps: 0, frames: 0, bytes: 0, width: 0, height: 0)
+    private var _codec: VideoCodec?
+    private var _frameHeader = "未检查"
     private var _lastPixelBuffer: CVPixelBuffer?
     private var _recordInfo: (Date, Int)?
     private var _recordingActive = false
@@ -67,6 +71,8 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
     /// 冲刷渲染器（重建解码器 / 完全重置时调用）
     var onFlushRenderer: (@Sendable () -> Void)?
     var onError: (@Sendable (String) -> Void)?
+    /// 编码 / 帧头等一次性说明（视频队列回调）
+    var onNote: (@Sendable (String) -> Void)?
     /// 需要新的 IDR（解码器重建 / 连续解码错误 / 录制开始而无 GOP 缓存）；已在此限频 3s
     var onNeedKeyframe: (@Sendable (String) -> Void)?
 
@@ -94,7 +100,8 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
     /// 完全重置（断开 / 刷新视频）：清空拆包、组帧、参数集、解码器、GOP 缓存、渲染器
     func reset() {
         queue.async { [self] in
-            parser.reset(); assembler.reset(); decoder.invalidate(); waitingKeyframe = true; waitSince = nil
+            deframer.reset(); parser.reset(); assembler.reset(); decoder.invalidate(); waitingKeyframe = true; waitSince = nil
+            loggedNoFrameHeader = false
             frameTimes = []; bytesWindow = []; chunkTimes = []; auTimes = []
             gopCache = []; gopBytes = 0; consecutiveErrors = 0
             onFlushRenderer?()
@@ -103,6 +110,7 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
                 let resets = _health.decoderResets
                 _health = VideoHealth(); _health.decoderResets = resets
                 _stats = Stats(fps: 0, kbps: 0, frames: 0, bytes: 0, width: 0, height: 0)
+                _codec = nil; _frameHeader = "未检查"
             }
         }
     }
@@ -125,8 +133,19 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
             let now = Self.now()
             bytesWindow.append((now, bytes.count)); bytesWindow.removeAll { now - $0.0 > 1 }
             chunkTimes.append(now); chunkTimes.removeAll { now - $0 > 1 }
-            if let r = recorder, r.format == .h264 { recQueue.async { r.appendRaw(bytes) } }
-            for nal in parser.push(bytes) {
+            let framed = deframer.push(bytes)
+            if framed.resetParser {
+                parser.reset(); assembler.reset(); decoder.invalidate(); waitingKeyframe = true; waitSince = nil
+                lock.withLock { _codec = nil; _frameHeader = "00 00 01 ff" }
+                onNote?("检测到 16 字节视频帧头 00 00 01 ff，已按声明长度剥离（Pocket 4/4P 布局，尚未用本机实机确认）")
+            } else if deframer.stillSearching, !loggedNoFrameHeader, deframer.bytesSeen > 32_000 {
+                loggedNoFrameHeader = true
+                lock.withLock { _frameHeader = "无" }
+                onNote?("视频流未见 00 00 01 ff 帧头，按 Annex-B 解析")
+            }
+            let piece = framed.bytes
+            if let r = recorder, r.format == .h264 { let raw = piece; recQueue.async { r.appendRaw(raw) } }
+            for nal in parser.push(piece) {
                 for au in assembler.push(nal) { handle(au, now: now) }
             }
             lock.withLock { _stats.bytes += bytes.count }
@@ -156,9 +175,20 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
         auTimes.append(now); auTimes.removeAll { now - $0 > 1 }
         updateHealth { $0.lastAUAt = now }
         if assembler.parameterSetsChanged || decoder.formatDescription == nil {
-            guard let sps = assembler.sps, let pps = assembler.pps else { return }
-            assembler.parameterSetsChanged = false
-            if !decoder.configure(sps: sps, pps: pps) { return }
+            switch assembler.codec {
+            case .h264:
+                guard let sps = assembler.sps, let pps = assembler.pps else { return }
+                assembler.parameterSetsChanged = false
+                if !decoder.configure(sps: sps, pps: pps) { return }
+                noteCodec(.h264)
+            case .hevc:
+                guard let vps = assembler.vps, let sps = assembler.sps, let pps = assembler.pps else { return }
+                assembler.parameterSetsChanged = false
+                if !decoder.configureHEVC(vps: vps, sps: sps, pps: pps) { return }
+                noteCodec(.hevc)
+            case nil:
+                return
+            }
         }
         if waitingKeyframe {
             if waitSince == nil { waitSince = now }
@@ -201,6 +231,20 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
 
     func noteRendererFlush() { updateHealth { $0.rendererFlushes += 1 } }
 
+    func detectedCodec() -> VideoCodec? { lock.withLock { _codec } }
+    func mediaNotes() -> (codec: String, frameHeader: String) {
+        lock.withLock { (_codec?.displayName ?? "未检测", _frameHeader) }
+    }
+
+    private func noteCodec(_ codec: VideoCodec) {
+        let first: Bool = lock.withLock {
+            let changed = _codec != codec
+            _codec = codec
+            return changed
+        }
+        if first { onNote?("视频编码 \(codec.displayName)（由参数集判断，不按机型写死）") }
+    }
+
     private func cacheGOP(_ sb: CMSampleBuffer, isKeyframe: Bool) {
         if isKeyframe { gopCache = []; gopBytes = 0 }
         guard isKeyframe || !gopCache.isEmpty else { return }
@@ -231,10 +275,14 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
                     let gop = gopCache.map(SampleBox.init(sb:))
                     recQueue.async { for (i, b) in gop.enumerated() { r.append(b.sb, isKeyframe: i == 0) } }
                 }
+            } else if assembler.codec == .hevc, let vps = assembler.vps, let sps = assembler.sps, let pps = assembler.pps {
+                let sc: Bytes = [0, 0, 0, 1]
+                recQueue.async { r.appendRaw(sc + vps + sc + sps + sc + pps) }
+                needKeyframe("开始录制原始 HEVC", force: true)
             } else if let sps = assembler.sps, let pps = assembler.pps {
                 let sc: Bytes = [0, 0, 0, 1]
                 recQueue.async { r.appendRaw(sc + sps + sc + pps) }
-                needKeyframe("开始录制 .h264", force: true)
+                needKeyframe("开始录制原始码流", force: true)
             }
         }
     }

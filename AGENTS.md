@@ -4,7 +4,7 @@
 
 ## 1. 项目目的
 
-**PocketStudio** 是一个原生 macOS 26 应用（纯 Swift + AppKit，**不使用 SwiftUI**）。名字不带型号：当前只接 **DJI Osmo Pocket 3**，标识符和目录按系列预留，以便以后加 Pocket 4 / Pocket 4P。连接流程：
+**PocketStudio** 是一个原生 macOS 26 应用（纯 Swift + AppKit，**不使用 SwiftUI**）。名字不带型号。当前接 **DJI Osmo Pocket 3**（实机），并按同一条链路接入 **Pocket 4 / Pocket 4P**（型号字节、部分模式号和 HEVC 预览来自 OpenPocketCine，尚未用本应用实机确认）。连接流程：
 蓝牙唤醒相机 Wi-Fi 热点 → 加入热点 → UDP 私有协议握手 → 接收并硬件解码 H.264 实时画面 → 拍照 / 录像 / 切换模式 / 云台 PTZ 控制 / 状态显示 / 将视频流录制到 Mac。界面文字为简体中文。
 
 ## 2. 来源
@@ -55,13 +55,13 @@ PocketStudioTests/  CoreProtocolTests、CameraLinkLoopbackTests（本地 UDP 假
 
 ## 4. 数据流
 
-1. **BLE 唤醒**（`BLEManager`，可在设置中跳过）：扫描厂商数据 `AA 08` + 型号 `20 00`（OsmoPocket3）→ 连接 → 订阅 `FFF4` 通知、写 `FFF5` → 发送配对消息（id `0x8092`）。收到任何应答即视为成功；相机约 20 秒后开启 Wi-Fi 热点。加入 Wi-Fi 期间 **保持蓝牙连接**（否则相机可能关闭热点），成功后断开。
+1. **BLE 唤醒**（`BLEManager`，可在设置中跳过）：厂商 ID 小端 `AA 08`（即 0x08AA；Xtra 为 `AA F7`）+ 型号字节 `20` Pocket 3 / `21` Pocket 4 / `22` Pocket 4P（后两个来自 OpenPocketCine 表，未实机确认）。没有厂商数据时用广播名（`OsmoPocket3` / `4` / `4P`，先匹配 4P）。扫描不会在第一台 0x20 出现后 0.5 秒结束，并记录厂商数据原始字节。订阅 `FFF4`、写 `FFF5`，配对 id `0x8092`。PIN 先 `mbln`（Pocket 3：任何应答都继续）；超时再试 `osmo`（`00 01` 已配对、`00 02` 请在相机上点允许；`00 06` 不是确认）。相机约 20 秒后开启 Wi-Fi。加入 Wi-Fi 期间 **保持蓝牙连接**，成功后断开。UDP 端口在机型里：DJI `9004`，Xtra `10004`。
 2. **加入 Wi-Fi**（`WiFiManager`）：CoreWLAN `scanForNetworks` + `associate`（需要定位权限才能读 SSID）。失败则降级为「手动加入」引导，轮询 getifaddrs 等待获得 `192.168.2.x` 地址（不依赖定位权限）。
-3. **UDP 握手**（`CameraLink`/`DJISessionCore`）：向 `192.168.2.1:9004` 发送握手包（type 0x00），采用相机回复中的 session ID。
+3. **UDP 握手**（`CameraLink`/`DJISessionCore`）：向 `192.168.2.1` 的机型端口（默认 9004，Xtra 10004）发送握手包（type 0x00），采用相机回复中的 session ID。
 4. **保活**（握手成功后）：ACK 每 20ms（type 0x04，带 video/telemetry/cmd 接收序号）；Camera:0x8E 1Hz（每 2 拍附 0xA0、每 5 拍附 0x61）。默认另发 **General:0x0E** 1Hz（空负载 request → Camera）。设置可切回旧版 **General:0x4F** 1Hz（版本配置分块读取，见 §5g）。云台速度只在有输入时发，硬上限 25Hz。
 5. **视频启动**（握手后 0.5s）：PUSH General:0x88 → DM368(1)；WRITE General:0x81 / 0x82 → DM368(2)（「客户端注册」）。之后 **0x88 保持 1Hz**、0x81/0x82 每 5s（OpenPocketCine：最后一次注册后约 8–10s 视频停止）。**默认不发送 0x4F**（它不是视频心跳，启动序列也不含它，见 §5g）。同时发送 **0x03/0xDA 云台初始化** `05 FF FF FF FF` → type 3 id 0（1s、3s 补发）。
    - **云台就绪门控**：收到首个 Gimbal:0x05 且距视频启动 ≥0.6s 才放行非零速度；4s 无姿态则强制放行并继续补发初始化。状态栏显示「云台准备中…」。
-6. **接收**：type 0x02 = 视频（去掉 12 字节窗口/帧信息后为 Annex-B H.264）→ `VideoPipeline`；type 0x01/0x05 = 遥测/命令（内含 DUML）→ 状态解析 + 调试日志。
+6. **接收**：type 0x02 = 视频（去掉 12 字节窗口/帧信息后为 Annex-B；编码按参数集识别，Pocket 3 为 H.264，4/4P 预览按公开资料为 HEVC，见 §5h）→ `VideoPipeline`；type 0x01/0x05 = 遥测/命令（内含 DUML）→ 状态解析 + 调试日志。
 
 ## 5. 协议速查
 
@@ -69,13 +69,13 @@ PocketStudioTests/  CoreProtocolTests、CameraLinkLoopbackTests（本地 UDP 假
 - **DUML**：`0x55 | len(10bit)+ver | CRC8(前 3B) | sender | receiver | seq LE16 | cmdType/ack | cmdSet | cmdID | payload | CRC16`。设备：1 相机、2 App、4 云台、8 DM368、13 ESC(电池)。flags 字节 = cmdType<<5：**0 = notify（0x00，无应答）、2 = request（0x40，需应答）、4 = 0x80（write/应答）、6 = 0xC0（response）**。⚠️ 原 Python 把 0 叫 REQ、2 叫 PUSH，语义正好反了；`DUMLCmdType` 已改名（`notify` / `request` / `write` / `response`），`sendReq` = notify、`sendPush` = request 仅为兼容旧名保留。
 - **相机命令（cmdSet 2，全部 flags 0x40，来源 OpenPocketCine `Commands.swift`，Pocket 3 实机抓包）**：
   - 快门 `0x02/0x01 [01]`（录像模式下应答 `d9`）；录像开始/停止 `0x02/0x02 [01]/[00]`（不是开关，录制中再开始应答 `df`）；延时摄影开始/停止走 `0x02/0x01 [01]/[00]`。
-  - 拍摄模式 `0x02/0xE1 [mode]`：慢动作 00、录像 01、延时 02、**拍照 05（Pocket 3；Pocket 4 是 0x17）**、移动延时 0A、全景 0C、夜景 28。**不要扫描其它取值**（OPC 报告扫描卡死过 Nano）。
+  - 拍摄模式 `0x02/0xE1 [mode]` 按 `DeviceProfile` 取值，**不要扫描其它取值**（OPC 报告扫描卡死过 Nano）。Pocket 3：慢动作 00、录像 01、延时 02、拍照 **05**、移动延时 0A、全景 0C、夜景 28。Pocket 4P（OPC，未在本应用实机确认）：拍照 **0x17**、实况照片 **0x4D**、慢动作 00；录像 / 延时等暂复用 Pocket 3。Pocket 4 的模式号没有公开抓包，整表复用 Pocket 3。SuperPhoto 不是 0xE1（OPC：留在拍照 0x17 里，用 `0x02/0x12` `[04, 画幅]`，快门 `0F`）——**先不发送**，见 TODO。
   - 原 Python 的 0x20/0x21 录制、0x02 切模式、flags 0x00 发送 —— 实机日志里相机对它们没有任何应答，已废弃。
   - 应答（flags 0x80/0xC0）由 `CameraLink.onReply` 上报，`AppModel.handleReply` 在日志里显示「相机应答 · 录像：成功 / 错误码」。
   - 关键帧：看门狗 / 解码恢复仍发 OPC 的 **0x09/0xA8 → DM368(0)**（≥3s 限频），并同时发 Mimo 的 **Camera:0xB3** 空负载（`AppRequestIFrame`，负载未实机验证，见 §5g）。
-- **状态解析**（OPC `CameraStatus.swift`，已用实机日志字节写成单测 `CameraCommandTests`）：Camera:0x80 **u32@0 bit7 = 录制中**、@5/@9 存储总量/剩余 MiB、@29 u16 = 已录秒数、**@57 = 拍摄模式（0xE1 取值）**；Camera:0xDC SD 总量/剩余 @6/@10；ESC:0x02 offset 1 LE16 = 毫伏、offset 20 = 电量 %；Gimbal:0x05（49–50B）：**i16@4 = yaw、−i16@20 = 俯仰（上正）**、i16@0 = 原生 pitch、@6 高 2 位 = 模式（0 方向锁定/1 FPV/2 跟随）。原 Python 的 0x80 / 0x05 解析是错的（日志 `01 02 80 00…` 被误读）。设置「旧版姿态解析」可切回原布局。
+- **状态解析**（OPC `CameraStatus.swift`，已用实机日志字节写成单测 `CameraCommandTests`）：Camera:0x80 **u32@0 bit7 = 录制中**、@5/@9 存储总量/剩余 MiB（仅 Pocket 3 按 SD 卡显示；4/4P 见 §5h）、@29 u16 = 已录秒数、**@57 = 拍摄模式（0xE1 取值）**；Camera:0xDC SD 总量/剩余 @6/@10（同样只在 Pocket 3）；ESC:0x02 offset 1 LE16 = 毫伏、offset 20 = 电量 %；Gimbal:0x05（49–50B）：**i16@4 = yaw、−i16@20 = 俯仰（上正）**、i16@0 = 原生 pitch、@6 高 2 位 = 模式（0 方向锁定/1 FPV/2 跟随）。原 Python 的 0x80 / 0x05 解析是错的（日志 `01 02 80 00…` 被误读）。设置「旧版姿态解析」可切回原布局。
 - **云台速度 Gimbal:0x01（10B）**：`[字段0 LE16][roll=0][字段2 LE16][0x8000][0x0042]`，速度值 0…2048，中位 1024（`GimbalProtocol.speedValue`，向零截断与 Python 一致）。
-  - ⚠️ **轴顺序**：**实机 Pocket 3 确认为 `[pitch, roll, yaw]`**（与 lib-osmo-ble 一致）；原 Python 命名为 `[yaw, roll, pitch]`，照搬会导致上下/左右互换。默认 `GimbalAxisOrder.pitchRollYaw`，设置中可切回。
+  - ⚠️ **轴顺序**：**实机 Pocket 3 确认为 `[pitch, roll, yaw]`**（与 lib-osmo-ble 一致）；原 Python 命名为 `[yaw, roll, pitch]`，照搬会导致上下/左右互换。默认 `GimbalAxisOrder.pitchRollYaw`，设置中可切回。Pocket 4 / 4P 用同一载荷，轴顺序和正负方向 **未验证**。不实现长焦镜头切换。
   - UI 语义：yaw 右为正，pitch 上为正；每轴可在设置中反转（默认不反转；**实机方向正负尚需确认**）。
 - **云台停止逻辑**（`GimbalSpeedController`，单测覆盖）：`stop()` 立即发零速并在随后 tick 补发，共 `stopRepeats = 4` 次（30Hz ≈ 100ms）；停止后 30Hz 循环只发零速（所有调用都在 `CameraLink.queue` 串行，无竞态）；连续输入 >300ms 无刷新 → 看门狗归零；`nudge` 到期自动停止且不受看门狗影响。UI 端（`LiveViewController`）：mouseUp / 摇杆松开 / keyUp / 空格 / 触控板 phase 或 momentum 结束 / 窗口失焦、最小化、关闭 / App 失活或隐藏 / 视图消失 → `stopAllGimbalInput()`；按住期间每 100ms 重发速度以喂看门狗，并用 `NSEvent.pressedMouseButtons` 检测丢失的 mouseUp。
 - **云台模式 / 回中（0x04/0x4C，flags 0x40）**：回中 `FE 08`、前后翻转 `FE 09`、跟随 `02 08`、FPV `01 08`、方向锁定 `00 08`；转速 `0x04/0x50 00 05 01 <0快/1默认/2慢>`。回中前先发零速 + `0x04/0x14 00×6 04 01`（打断残留定时移动）。
@@ -165,11 +165,30 @@ PocketStudioTests/  CoreProtocolTests、CameraLinkLoopbackTests（本地 UDP 假
 
 Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）、`dji_general_heartbeat_req`（General:0x0E）、`dji_camera_get_app_request_i_frame_req`（Camera:0xB3）。dji-firmware-tools 把 0x4F 标成 Get Cfg File、0x0E 标成 Heartbeat/Log Message（PC 请求通常空负载，应答才可能带 1 字节 group）、0xB3 标成 Request IFrame（只有名字，没有字段）。DUMLrub `cmd_common_get_cfg_file` 的请求体是 `type u8 + offset u32le + length u32le`。OPC 传输文档：画面在最后一次 `0x00/0x88` 或 `0x00/0x81` 之后约 8–10s 停止，单独的 0x09/0xA8 不能把它拉起来。lib-osmo-ble 是 BLE 云台协议，没有这两条 Wi-Fi 命令。
 
-- **默认（设置「Mimo 链路心跳」开，`LinkKeepalive.mimo`）**：不发送 0x4F，启动时也不发一次。没有证据表明视频门控在这次文件读取上，发一次仍会拉回约 265 字节 XML。握手后每 1s `tickLinkHeartbeat()` 发 General:0x0E，空负载、flags 0x40、接收方**假设为 Camera(1,0)**（`HeartbeatLogic` 的对端没有从符号里解出）。保留 0x88 1Hz、0x81/0x82 每 5s、Camera:0x8E 1Hz（加 0xA0/0x61）。连接成功和切换设置时日志写「链路保活：Mimo」；诊断行末尾 `保活 0x0E`。前 3 条 0x0E 应答写入文本日志（含 payload）。
+- **默认（设置「Mimo 链路心跳」开，`LinkKeepalive.mimo`）**：不发送 0x4F，启动时也不发一次。没有证据表明视频门控在这次文件读取上，发一次仍会拉回约 265 字节 XML。握手后每 1s `tickLinkHeartbeat()` 发 General:0x0E，空负载、flags 0x40、接收方**假设为 Camera(1,0)**（`HeartbeatLogic` 的对端没有从符号里解出）。保留 0x88 1Hz、0x81/0x82 每 5s、Camera:0x8E 1Hz（加 0xA0/0x61）。连接成功和切换设置时日志写「链路保活：Mimo」；诊断行含 `保活 0x0E`（其后还有型号 / 编码 / 帧头 / UDP，见 §5h）。前 3 条 0x0E 应答写入文本日志（含 payload）。
 - **关掉该设置（`LinkKeepalive.legacy`）**：恢复 0x4F → DM368(2) 1Hz，负载仍是 `01 00 XX 00 00 ff ff ff ff`。不发 0x0E。日志「链路保活：旧版」，诊断 `保活 旧0x4F`。前 2 条 0x4F 应答记录字节数。0x88 / 0x8E 两种模式相同。
 - **关键帧**：`requestKeyframe()` 先发 OPC 的 0x09/0xA8 → DM368(0)（负载不变），再发 Camera:0xB3 空负载 flags 0x40。仍由 CameraLink 限频 ≥3s，禁止周期发送。调用点不变：解码连续错误、重建解码器、看门狗重新注册。日志「请求关键帧（0x09/0xA8 + Camera:0xB3）」；应答「相机应答 · 关键帧 Camera:0xB3」。空负载是假设（GET 模板名，且没有公开字段布局）。
 
 未验证：停发 0x4F 后 Pocket 3 画面能否单靠 0x88 维持；0x0E 的接收方是不是 Camera；0xB3 空包会不会真的引出 IDR。实机清单见 §10。
+
+## 5h. Pocket 4 / Pocket 4P（机型档，2026-10-12）
+
+`DeviceProfile`（Pocket 3 / 4 / 4P / 未知）在连接时确定，驱动模式号、UDP 端口、SD 字段是否解析、界面上的型号名。预览编码 **不** 按机型写死。链路保活（§5g 的 0x0E / 0x4F）与机型无关，两种模式都走同一套。
+
+- **识别**：厂商数据首字节 `0x20` / `0x21` / `0x22`（公司 ID 小端 `AA 08` = 0x08AA，Xtra `AA F7`）。没有厂商数据时看广播名或设置里的 Wi-Fi 名。扫描记原始厂商字节。`0x21`/`0x22` 与 Xtra 端口 10004 都还没有用本应用实机确认。
+- **配对**：`mbln` 失败（超时或出错）再发 `osmo`。`osmo` 的 `00 01`、`00 02` 算成功；`00 06` 不是「请在屏幕上点允许」。TCP 7001 用同一次成功的 PIN。
+- **视频**：Annex-B 解析器在见到 HEVC `0x40/0x42/0x44`（VPS/SPS/PPS）或 H.264 `0x67/0x68` 之前不锁定编码。`0x28` 单独出现不得当成 H.264 PPS。HEVC 关键帧是 NAL type 16–21（BLA 首字节 `0x20` 很常见）。`CMVideoFormatDescriptionCreateFromHEVCParameterSets` 得到 hvc1，MP4 用 `AVAssetWriter` 直通、不重编码；原始文件在检测到 HEVC 时用 `.h265`。另外检查码流里有没有 16 字节帧头 `00 00 01 ff` + u32le 长度 + 8 字节元数据（OPC 对 4/4P 与 Nano 的描述）；没有就原样当 Annex-B，Pocket 3 行为不变。公开资料：4/4P 预览是 HEVC 1280×720、约 25 fps。
+- **状态**：4/4P 有机内存储，不再把 0x80 @5/@9 和 0xDC @6/@10 显示成 SD 容量。调试日志每 5 秒（以及 @57 变化时）打一行 `[调试] Camera:0x80` 原始十六进制。
+- **云台**：载荷与 Pocket 3 相同。轴顺序 / 正负方向在 4/4P 上未验证。没有长焦切换。
+
+### 有 Pocket 4 / 4P 时请回传的日志
+
+1. 扫描行里的「厂商数据」原始字节，以及「识别型号」那一行（确认 0x21 / 0x22 和广播名）。
+2. 「配对应答（PIN mbln / osmo）」的 payload（尤其是不是 00 01 / 00 02 / 00 06）。
+3. 「视频编码」和「帧头」两行：是 H.264 还是 HEVC，有没有 `00 00 01 ff`。
+4. 若干条 `[调试] Camera:0x80 …`（含 @57），外加调试页里 Camera:0xDC 的原始负载。用来确认机内存储字段，不要靠界面上的容量。
+5. 切换拍照 / 实况 / 录像后的「切换模式」行和「相机应答 · 切换模式」。Pocket 4 的模式号是暂用 Pocket 3 的；4P 的录像 / 延时也是暂用。
+6. 云台上下左右各拨一下后的现象（方向是否和 Pocket 3 一致）。诊断行在「保活」之后还有「型号 · 编码 · 帧头 · UDP」。
 
 ## 6. 并发 / 隔离约定（Swift 6.2）
 
@@ -186,7 +205,7 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
 ## 7. 构建与测试
 
 - **macOS**：Xcode 26 / macOS 26 SDK。`brew install xcodegen && xcodegen generate`，打开 `PocketStudio.xcodeproj`，选择签名团队后运行。部署目标 macOS 26.0。未开启 App Sandbox（CoreWLAN 加入网络在沙盒中受限）。
-- **测试**：Xcode 中 ⌘U；或 `Tools/run-linux-tests.sh`（Swift 6.2+，`-warnings-as-errors`，默认 MainActor 隔离）；`ISOLATION=nonisolated Tools/run-linux-tests.sh` 测另一种默认值。当前 44 个协议层测试（含链路保活调度与 Camera:0xB3）。
+- **测试**：Xcode 中 ⌘U；或 `Tools/run-linux-tests.sh`（Swift 6.2+，`-warnings-as-errors`，默认 MainActor 隔离）；`ISOLATION=nonisolated Tools/run-linux-tests.sh` 测另一种默认值。当前 49 个协议层测试（含机型档、HEVC、链路保活调度与 Camera:0xB3）。
 - 新增 Swift 文件后需重新 `xcodegen generate`（Linux 上可自行编译 XcodeGen）。
 
 ## 8. 已踩过的坑（及修复）
@@ -209,16 +228,19 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
 
 ## 9. 已验证 / 未验证
 
-- **已验证（Linux，Swift 6.2.3 编译 + 单测）**：CRC、DUML、UDP 头/握手/ACK/命令包与 Python 逐字节一致；状态解析；BLE 帧与识别；H.264 Annex-B 拆分与访问单元组装；`CameraLink` 与本地假相机的完整回环（握手、ACK、心跳、视频、注册、拍照、云台）；云台轴映射 / 停止 / 看门狗。
-- **实机已确认（用户反馈）**：应用可在真实 Pocket 3 上构建运行；云台轴顺序 `[pitch, roll, yaw]`。
-- **依据第三方实机抓包（OpenPocketCine）但本应用尚未实机复测**：相机快门/录像/模式命令、云台回中/模式/翻转/转速、0x03/0xDA 初始化、0x80/0x05 新解析、GOP 缓存录制。
+- **已验证（Linux，Swift 6.2.3 编译 + 单测）**：CRC、DUML、UDP 头/握手/ACK/命令包与 Python 逐字节一致；状态解析；BLE 帧与识别；H.264 Annex-B 拆分与访问单元组装；HEVC 参数集识别、IRAP 16–21 关键帧、`00 00 01 ff` 帧头剥离与 Pocket 3 Annex-B 原样通过；机型识别（0x20/0x21/0x22、广播名、Xtra 端口 10004）；模式表（Pocket 3 拍照 05，4P 拍照 0x17 / 实况 0x4D，Pocket 4 复用 Pocket 3）；4/4P 不把 0x80/0xDC 当成 SD 容量；默认保活发 General:0x0E、不发 0x4F，旧版可切回；关键帧同时发 0x09/0xA8 与 Camera:0xB3；`CameraLink` 与本地假相机的完整回环（握手、ACK、心跳、视频、注册、拍照、云台）；云台轴映射 / 停止 / 看门狗。
+- **实机已确认（用户反馈）**：应用可在真实 Pocket 3 上构建运行；云台轴顺序 `[pitch, roll, yaw]`。Pocket 4 / 4P **没有**用本应用实机确认。
+- **依据第三方实机抓包（OpenPocketCine）但本应用尚未实机复测**：相机快门/录像/模式命令、云台回中/模式/翻转/转速、0x03/0xDA 初始化、0x80/0x05 新解析、GOP 缓存录制；Pocket 4/4P 的型号字节 0x21/0x22、PIN `osmo`、HEVC 预览、16 字节帧头、4P 拍照 0x17 / 实况 0x4D / 慢动作 0x00、Xtra UDP 10004。SuperPhoto（`0x02/0x12`，快门 `0F`）只记在常量里，**不发送**。
 - **未在 Linux 编译、仅人工审阅**：所有 `Platform/`、`App/`、`Views/` 文件（用户已在 Xcode 26 编译通过的版本之后的改动：云台 UI 停止钩子、`LocalNetworkPermission`）。
 - **未实机验证**：云台方向正负（反转开关默认关）；roll 字段（@2，OPC 用四元数求）；BLE RTMP 直播流程；CoreWLAN 自动加入在各系统版本上的表现；本地网络授权检测（拒绝码 -65570 的实际触发）；MP4 录制的时间戳与 QuickTime 兼容性。
 - **未实机验证（§5g）**：默认停发 0x4F 后画面是否仍能靠 0x88 维持；General:0x0E 空负载发往 Camera(1,0) 是否被 Pocket 3 接受（应答负载未知）；Camera:0xB3 空负载是否请求到 IDR。设置「Mimo 链路心跳」默认开，关掉即恢复旧版 0x4F，供 A/B。
 
 ## 10. TODO / 开放问题
 
-- [未实测] 退出回放命令能否让 Pocket 3 在拍照后恢复实时流；TCP 7001 戳对重连成功率的实际影响；bit18/19 = 拍照处理中 只是推断。
+- [未实测] Pocket 4 / 4P 整条连接（蓝牙型号字节、`osmo` PIN、UDP 端口、HEVC 出画、`00 00 01 ff` 帧头是否存在、0x80 机内存储布局、云台方向）。用户要回传的日志见 §5h。
+- [未发送] Pocket 4P SuperPhoto：公开资料是拍照模式 0x17 内的 `0x02/0x12`（标准 `00` / 超清 `04`，画幅第二字节）和快门 `0F`，不是单独的 0xE1。实机确认前不发。
+- [未知、暂用 Pocket 3、不扫描] Pocket 4 的全部 0xE1；Pocket 4P 的录像 / 延时 / 移动延时 / 全景 / 夜景。
+- [未实测] 退出回放命令能否让 Pocket 3 在拍照后恢复实时流；TCP 7001 戳对重连成功率的实际影响；bit18/19 = 拍照处理中 只是推断。4/4P 上退出回放同样未验证。
 - [未实测] §5g 保活 A/B：默认 Mimo（日志「链路保活：Mimo」，诊断 `保活 0x0E`）连着拖云台至少 2 分钟，看「相机应答 n/s」是否保持、画面是否停；再关掉设置项（日志「链路保活：旧版」，诊断 `保活 旧0x4F`）复测一轮。看门狗或解码恢复时应出现「请求关键帧（0x09/0xA8 + Camera:0xB3）」以及是否有「相机应答 · 关键帧 Camera:0xB3」（记下 payload / 错误码）。前几条 0x0E 应答的 payload 也请留下。
 - 若拍照后仍黑屏：看日志「相机处于回放 → 发送退出回放」后 0x80 bit30 是否清除、是否有 0x02/0x0C 应答。
 

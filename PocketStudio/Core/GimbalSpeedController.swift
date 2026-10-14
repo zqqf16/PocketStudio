@@ -14,6 +14,7 @@ import Foundation
 /// Gimbal:0x01 速度负载里前后两个 int16 字段分别是哪个轴
 nonisolated public enum GimbalAxisOrder: String, CaseIterable, Sendable {
     /// [pitch, roll, yaw] —— 实机 Pocket 3 验证（与 lib-osmo-ble PROTOCOL.md 一致）。默认。
+    /// Pocket 4 / 4P 仍用这一载荷；轴顺序和正负方向没有在 4/4P 上验证。不发送长焦镜头切换。
     case pitchRollYaw
     /// [yaw, roll, pitch] —— 原 Python gimbal.py 的字段命名（实测轴向互换）。
     case yawRollPitch

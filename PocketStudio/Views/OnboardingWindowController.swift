@@ -65,19 +65,19 @@ final class OnboardingWindowController: NSWindowController {
     private func build() {
         pages = [
             page(symbol: "camera.aperture", title: "欢迎使用 PocketStudio",
-                 body: "用 Mac 无线连接 DJI Osmo Pocket 3：实时取景、录制视频流、拍照 / 录像、切换模式、用键盘或触控板控制云台。\n\n接下来 1 分钟，我们会完成：系统权限 → 填写相机 Wi-Fi → 了解连接流程。"),
+                 body: "用 Mac 无线连接 DJI Osmo Pocket（3、4 或 4P）：实时取景、录制视频流、拍照 / 录像、切换模式、用键盘或触控板控制云台。\n\n接下来 1 分钟，我们会完成：系统权限 → 填写相机 Wi-Fi → 了解连接流程。"),
             page(symbol: "lock.shield", title: "授予系统权限",
                  body: "macOS 会逐项询问。请全部点「允许」。如果之前点了「不允许」，点右侧「系统设置」手动打开。",
                  extra: [permRow("dot.radiowaves.left.and.right", "蓝牙", "用于唤醒相机的 Wi-Fi 热点（必需）。", btStatus, request: #selector(reqBT), settings: #selector(setBT)),
                          permRow("network", "本地网络", "用于与相机 192.168.2.1 通信（必需）。点「请求」会立即弹出系统授权框，请选择「允许」。", lnStatus, request: #selector(reqLN), settings: #selector(setLN)),
                          permRow("location", "定位服务（可选）", "macOS 要求 App 读取 Wi-Fi 名称必须有定位权限。授予后可自动加入相机 Wi-Fi；不授予则需手动在菜单栏选择。", locStatus, request: #selector(reqLoc), settings: #selector(setLoc))]),
             page(symbol: "wifi", title: "相机 Wi-Fi 名称和密码",
-                 body: "在哪里找：在 Pocket 3 屏幕上从顶部向下滑 → 进入设置（齿轮）→「无线连接 / Wi-Fi」菜单，可看到热点名称（形如 OsmoPocket3-XXXX）和密码。不同固件菜单名称可能略有差异。\n\n不确定也可以先跳过：之后在「设置」中填写，或连接时按提示手动加入。",
+                 body: "在哪里找：在相机屏幕上从顶部向下滑 → 进入设置（齿轮）→「无线连接 / Wi-Fi」菜单，可看到热点名称（形如 OsmoPocket3-XXXX、OsmoPocket4-XXXX 或 OsmoPocket4P-XXXX）和密码。不同固件菜单名称可能略有差异。\n\n不确定也可以先跳过：之后在「设置」中填写，或连接时按提示手动加入。",
                  extra: [buildWiFiForm()]),
             page(symbol: "list.number", title: "连接流程",
                  body: """
                  点击工具栏「连接」后，App 会自动依次：
-                 ① 蓝牙扫描并与 Pocket 3 配对（首次可能需要在相机上点确认）
+                 ① 蓝牙扫描并与 Osmo Pocket 配对（首次可能需要在相机上点确认）
                  ② 等待约 20 秒，相机开启 Wi-Fi 热点
                  ③ 让 Mac 加入相机 Wi-Fi（若系统不允许自动加入，会显示手动步骤：拷贝密码 → 菜单栏 Wi-Fi 中选择相机 → 粘贴）
                  ④ 与相机握手并显示实时画面
@@ -111,7 +111,7 @@ final class OnboardingWindowController: NSWindowController {
     private func buildWiFiForm() -> NSView {
         ssidField.stringValue = model.settings.ssid
         pwField.stringValue = model.settings.password
-        ssidField.placeholderString = "OsmoPocket3-XXXX"
+        ssidField.placeholderString = "OsmoPocket3-XXXX / OsmoPocket4P-XXXX"
         pwField.placeholderString = "相机 Wi-Fi 密码"
         for f in [ssidField, pwField] { f.translatesAutoresizingMaskIntoConstraints = false; f.widthAnchor.constraint(equalToConstant: 280).isActive = true }
         let g = NSGridView(views: [[UI.label("Wi-Fi 名称"), ssidField], [UI.label("Wi-Fi 密码"), pwField]])

@@ -46,15 +46,17 @@ nonisolated final class CameraCommandTests: XCTestCase {
         XCTAssertEqual(legacy.yaw, -152.9, accuracy: 0.01)
     }
 
-    func testCameraCommandPayloads() {
+    func testCameraCommandPayloads() throws {
         XCTAssertEqual(CameraCommand.takePhoto.cmdID, 0x01); XCTAssertEqual(CameraCommand.takePhoto.payload, [0x01])
         XCTAssertEqual(CameraCommand.startRecording.cmdID, 0x02); XCTAssertEqual(CameraCommand.startRecording.payload, [0x01])
         XCTAssertEqual(CameraCommand.stopRecording.cmdID, 0x02); XCTAssertEqual(CameraCommand.stopRecording.payload, [0x00])
-        XCTAssertEqual(CameraCommand.setMode(.photo).cmdID, 0xE1); XCTAssertEqual(CameraCommand.setMode(.photo).payload, [0x05])
-        XCTAssertEqual(CameraCommand.setMode(.video).payload, [0x01])
-        XCTAssertEqual(CameraCommand.setMode(.slowMotion).payload, [0x00])
-        XCTAssertEqual(CameraCommand.setMode(.timelapse).payload, [0x02])
-        for spec in [CameraCommand.takePhoto, CameraCommand.startRecording, CameraCommand.stopRecording, CameraCommand.setMode(.video)] {
+        let photo = try XCTUnwrap(CameraCommand.setMode(.photo))
+        XCTAssertEqual(photo.cmdID, 0xE1); XCTAssertEqual(photo.payload, [0x05])
+        XCTAssertEqual(CameraCommand.setMode(.video)?.payload, [0x01])
+        XCTAssertEqual(CameraCommand.setMode(.slowMotion)?.payload, [0x00])
+        XCTAssertEqual(CameraCommand.setMode(.timelapse)?.payload, [0x02])
+        let videoMode = try XCTUnwrap(CameraCommand.setMode(.video))
+        for spec in [CameraCommand.takePhoto, CameraCommand.startRecording, CameraCommand.stopRecording, videoMode] {
             XCTAssertEqual(spec.cmdType, DUMLCmdType.request, "相机命令必须 flags 0x40")
             let b = DUML.build(senderType: 2, senderID: 0, receiverType: spec.receiverType, receiverID: 0,
                                cmdSet: spec.cmdSet, cmdID: spec.cmdID, payload: spec.payload, cmdType: spec.cmdType)
@@ -66,6 +68,44 @@ nonisolated final class CameraCommandTests: XCTestCase {
         XCTAssertEqual(CameraCommand.recordCommand(start: true, mode: .timelapse), CameraCommand.takePhoto)
         XCTAssertEqual(CameraCommand.recordCommand(start: false, mode: .timelapse), CameraCommand.shutterStop)
         XCTAssertEqual(CameraCommand.describeReply(cmdID: 1, payload: [0xD9]), "当前模式不支持（如在录像模式下拍照）")
+        XCTAssertNil(CameraCommand.setMode(.livePhoto), "Pocket 3 不发送未知的实况模式号")
+        XCTAssertEqual(CameraCommand.setMode(.photo, profile: .pocket4P)?.payload, [0x17])
+        XCTAssertEqual(CameraCommand.setMode(.livePhoto, profile: .pocket4P)?.payload, [0x4D])
+        XCTAssertEqual(CameraCommand.setMode(.video, profile: .pocket4P)?.payload, [0x01])
+        XCTAssertEqual(CameraCommand.setMode(.slowMotion, profile: .pocket4P)?.payload, [0x00])
+        XCTAssertEqual(CameraCommand.setMode(.timelapse, profile: .pocket4P)?.payload, [0x02])
+        XCTAssertEqual(CameraCommand.setMode(.photo, profile: .pocket4)?.payload, [0x05], "Pocket 4 模式号未知，复用 Pocket 3")
+        XCTAssertNil(CameraCommand.setMode(.livePhoto, profile: .pocket4))
+        XCTAssertEqual(Pocket4PSuperPhoto.formatCommand, 0x12)
+        XCTAssertEqual(Pocket4PSuperPhoto.superPhoto16x9, [0x04, 0x01])
+        XCTAssertEqual(Pocket4PSuperPhoto.shutter, [0x0F])
+        XCTAssertFalse(DeviceProfile.pocket4P.modeTable.wire.values.contains(0x12), "SuperPhoto 不是 0xE1 取值，不得当成模式号发送")
+        let sent = DeviceProfile.pocket4P.modeTable.wire.values
+        XCTAssertEqual(Set(sent).count, sent.count, "模式表里不能有重复的线上取值")
+    }
+
+    func testPocket4PStorageDoesNotParseSDFields() {
+        var c = CameraStatus()
+        XCTAssertTrue(c.apply(pkt(2, 0x80, log80), profile: .pocket4P))
+        XCTAssertFalse(c.sdInserted)
+        XCTAssertEqual(c.sdTotalMB, 0)
+        XCTAssertEqual(c.sdFreeMB, 0)
+        XCTAssertEqual(c.mode, .video, "@57 = 0x01 在 4P 表里仍是录像")
+        var photo = log80; photo[57] = 0x17
+        XCTAssertTrue(c.apply(pkt(2, 0x80, photo), profile: .pocket4P))
+        XCTAssertEqual(c.mode, .photo)
+        var live = log80; live[57] = 0x4D
+        XCTAssertTrue(c.apply(pkt(2, 0x80, live), profile: .pocket4P))
+        XCTAssertEqual(c.mode, .livePhoto)
+        var plain = CameraStatus()
+        XCTAssertTrue(plain.apply(pkt(2, 0x80, photo)))
+        XCTAssertNil(plain.mode, "0x17 不是 Pocket 3 的拍照")
+        XCTAssertTrue(plain.sdInserted, "Pocket 3 仍解析 SD 字段")
+        var storage = CameraStatus()
+        XCTAssertTrue(storage.apply(pkt(2, 0xDC, logDC), profile: .pocket4P))
+        XCTAssertFalse(storage.hasStorageStatus)
+        XCTAssertFalse(storage.sdInserted)
+        XCTAssertFalse(storage.rawDC.isEmpty)
     }
 
     func testGimbalCommandPayloads() {
