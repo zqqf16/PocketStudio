@@ -123,6 +123,11 @@ nonisolated public struct DeviceProfile: Sendable, Equatable {
 
     public var isPocketSeries: Bool { model != .unknown }
 
+    /// 访问单元前的 16 字节 `00 00 01 ff` 帧头。只有 Pocket 4 / 4P 的公开资料这么写。
+    /// Pocket 3 在 UDP 层去掉 12 字节分片头后就是 Annex-B；对它做帧头剥离会把起始码误判成长度头，
+    /// 画面连续报 VideoToolbox -12909。
+    public var usesLiveViewFrameHeader: Bool { model == .pocket4 || model == .pocket4P }
+
     public static let pocket3 = DeviceProfile(
         model: .pocket3, isDJI: true, vendor: .dji, displayName: "Osmo Pocket 3",
         udpPort: DJIUDPFrame.cameraPort, parsesSDCapacity: true, hasInternalStorage: false,

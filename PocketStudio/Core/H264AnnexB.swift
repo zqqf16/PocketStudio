@@ -1,7 +1,9 @@
 // H264AnnexB.swift — Annex-B 字节流拆分为 NAL，并组装为访问单元（平台无关）
 //
-// Pocket 3：UDP type 2 去掉 12 字节头后是 H.264 Annex-B（原项目直接喂给 ffplay -f h264）。
-// Pocket 4 / 4P（OpenPocketCine，未在本应用实机确认）：同一路径上是 HEVC，帧前可能有 16 字节
+// Pocket 3：UDP type 2 去掉 12 字节分片头后就是 H.264 Annex-B（原项目直接喂给 ffplay -f h264）。
+// 不要再在这条流上找 16 字节帧头：`00 00 01` 是 Annex-B 起始码，后面紧跟的字节会被误当成
+// `00 00 01 ff` 帧头，按「长度」把 NAL 从中间切开，VideoToolbox 连续报 -12909。
+// Pocket 4 / 4P（OpenPocketCine，未在本应用实机确认）才可能在访问单元前另有 16 字节
 // `00 00 01 ff` 头。编码只在见到明确的参数集后才确定——0x28 既是 HEVC IDR_N_LP 也是 H.264 PPS。
 
 nonisolated public enum VideoCodec: String, Sendable, Equatable {
@@ -86,12 +88,17 @@ nonisolated public struct AnnexBParser {
     }
 }
 
-/// 把「16 字节 DJI 帧头 + 声明长度的编码字节」从 Annex-B 里拆开。
-/// 头为 `00 00 01 ff` | u32le 编码长度 | 8 字节元数据（OpenPocketCine，Pocket 4/4P 与 Nano；本应用未实机确认）。
-/// 看不到这个头时，字节原样送出（Pocket 3 的 Annex-B 不变，只多留末尾 24 字节以免把头从包边界切开）。
+/// 把「16 字节 DJI 帧头 + 声明长度的编码字节」从码流里拆开。
+/// 头为 `00 00 01 ff` | u32le 编码长度 | 8 字节元数据（OpenPocketCine 对 Pocket 4/4P 与 Nano 的描述）。
+///
+/// `armed == false`（Pocket 3、未识别机型）时字节原样送出，和加这个类型之前一样。
+/// `armed == true` 时，只有「下一帧头正好落在声明长度处，且载荷以 Annex-B 起始码开头」才剥离。
+/// 单独的 `00 00 01` + `ff`（起始码，或 4 字节起始码 `00 00 00 01` 错一位）不会被当成帧头。
 nonisolated public struct DJILiveViewDeframer {
     public static let headerLength = 16
-    public static let maxEncoded = 4_000_000
+    public static let maxEncoded = 1_500_000
+    /// 只对 Pocket 4 / 4P 打开。Pocket 3 的 12 字节分片头已经在 UDP 层去掉。
+    public var armed = false
     private var buf = Bytes()
     private var searching = true
     public private(set) var usesFrameHeader = false
@@ -99,7 +106,7 @@ nonisolated public struct DJILiveViewDeframer {
     public private(set) var bytesSeen = 0
     public var stillSearching: Bool { searching }
 
-    public init() {}
+    public init(armed: Bool = false) { self.armed = armed }
     public mutating func reset() {
         buf = []; searching = true; usesFrameHeader = false; frames = 0; bytesSeen = 0
     }
@@ -111,67 +118,140 @@ nonisolated public struct DJILiveViewDeframer {
 
     public mutating func push(_ chunk: Bytes) -> Output {
         bytesSeen += chunk.count
+        if !armed { return Output(bytes: chunk, resetParser: false) }
         buf += chunk
         if searching {
-            if let idx = Self.findHeader(buf) {
+            switch Self.probe(buf, allowExactEnd: false) {
+            case let .confirmed(idx):
                 searching = false
                 usesFrameHeader = true
+                let prefix: Bytes = idx > 0 ? Bytes(buf.prefix(idx)) : []
                 buf.removeFirst(idx)
-                return Output(bytes: drain(), resetParser: true)
-            }
-            let hold = 24
-            if buf.count > hold {
-                let n = buf.count - hold
-                let out = Bytes(buf.prefix(n))
-                buf.removeFirst(n)
+                return Output(bytes: prefix + drain(allowExactEnd: false), resetParser: true)
+            case let .holdFrom(idx):
+                if idx == 0 { return Output(bytes: [], resetParser: false) }
+                let out = Bytes(buf.prefix(idx))
+                buf.removeFirst(idx)
                 return Output(bytes: out, resetParser: false)
+            case .none:
+                return Output(bytes: release(keep: 24), resetParser: false)
             }
-            return Output(bytes: [], resetParser: false)
         }
-        return Output(bytes: drain(), resetParser: false)
+        return Output(bytes: drain(allowExactEnd: false), resetParser: false)
     }
 
-    /// 搜索结束时把尾部吐出。已经进入帧头模式时，只吐出完整帧，半帧留到下次。
+    /// 流结束时吐出尾部。帧头模式里，缓冲恰好停在一帧末尾也算证明（没有「下一帧」了）。
     public mutating func flush() -> Bytes {
-        if searching {
+        if !armed {
             defer { buf = [] }
             return buf
         }
-        return drain()
+        if searching, case let .confirmed(idx) = Self.probe(buf, allowExactEnd: true) {
+            searching = false
+            usesFrameHeader = true
+            buf.removeFirst(idx)
+        }
+        let out = drain(allowExactEnd: true)
+        if searching {
+            let tail = buf
+            buf = []
+            return out + tail
+        }
+        return out
     }
 
-    private static func findHeader(_ b: Bytes) -> Int? {
-        guard b.count >= 8 else { return nil }
+    private enum Probe {
+        case confirmed(Int)
+        case holdFrom(Int)
+        case none
+    }
+
+    private static func isMarker(_ b: Bytes, _ i: Int) -> Bool {
+        i >= 0 && i + 3 < b.count && b[i] == 0 && b[i + 1] == 0 && b[i + 2] == 1 && b[i + 3] == 0xFF
+    }
+
+    /// 帧头后面的载荷必须以 Annex-B 起始码开头，且 NAL 禁止位是 0。
+    /// `00 00 00 01 ff`（4 字节起始码错一位）或起始码后直接跟着 `ff` 的 NAL，偏移 16 处不是起始码。
+    private static func payloadLooksLikeAnnexB(_ b: Bytes, _ payload: Int) -> Bool {
+        guard payload >= 0 else { return false }
+        if payload + 3 < b.count, b[payload] == 0, b[payload + 1] == 0, b[payload + 2] == 1 {
+            return (b[payload + 3] & 0x80) == 0
+        }
+        if payload + 4 < b.count, b[payload] == 0, b[payload + 1] == 0, b[payload + 2] == 0, b[payload + 3] == 1 {
+            return (b[payload + 4] & 0x80) == 0
+        }
+        return false
+    }
+
+    /// 证明是帧头：声明长度处还能看到下一帧的 `00 00 01 ff`。
+    /// `allowExactEnd` 只在 flush 时使用，避免半个 UDP 包刚好凑满长度就提前剥。
+    private static func probe(_ b: Bytes, allowExactEnd: Bool) -> Probe {
+        guard b.count >= 8 else { return .none }
         var i = 0
-        let last = b.count - 8
-        while i <= last {
-            if b[i] == 0, b[i + 1] == 0, b[i + 2] == 1, b[i + 3] == 0xFF {
+        while i + 8 <= b.count {
+            if isMarker(b, i) {
                 let n = Int(b.le32(i + 4))
-                if (1 ... maxEncoded).contains(n) { return i }
-                i += 4
-                continue
+                if (4 ... maxEncoded).contains(n) {
+                    let payload = i + headerLength
+                    let end = payload + n
+                    if b.count < payload + 4 {
+                        return .holdFrom(i)
+                    }
+                    if payloadLooksLikeAnnexB(b, payload) {
+                        if b.count >= end + 4, isMarker(b, end) { return .confirmed(i) }
+                        if allowExactEnd, b.count == end { return .confirmed(i) }
+                        if b.count < end + 4 { return .holdFrom(i) }
+                    }
+                }
             }
             i += 1
         }
-        return nil
+        return .none
     }
 
-    private mutating func drain() -> Bytes {
-        if buf.count >= 8, Self.findHeader(buf).map({ $0 > 0 }) == true, let idx = Self.findHeader(buf) {
-            buf.removeFirst(idx)
-        }
-        var out = Bytes()
-        while buf.count >= Self.headerLength
-            && buf[0] == 0 && buf[1] == 0 && buf[2] == 1 && buf[3] == 0xFF {
-            let n = Int(buf.le32(4))
-            guard (1 ... Self.maxEncoded).contains(n) else { break }
-            let total = Self.headerLength + n
-            if buf.count < total { break }
-            out.append(contentsOf: buf[Self.headerLength ..< total])
-            buf.removeFirst(total)
-            frames += 1
-        }
+    private mutating func release(keep: Int) -> Bytes {
+        guard buf.count > keep else { return [] }
+        let n = buf.count - keep
+        let out = Bytes(buf.prefix(n))
+        buf.removeFirst(n)
         return out
+    }
+
+    private mutating func drain(allowExactEnd: Bool) -> Bytes {
+        var out = Bytes()
+        while true {
+            switch Self.probe(buf, allowExactEnd: allowExactEnd) {
+            case let .confirmed(idx):
+                if idx > 0 {
+                    out.append(contentsOf: buf.prefix(idx))
+                    buf.removeFirst(idx)
+                }
+                let n = Int(buf.le32(4))
+                let total = Self.headerLength + n
+                guard buf.count >= total else { return out }
+                out.append(contentsOf: buf[Self.headerLength ..< total])
+                buf.removeFirst(total)
+                frames += 1
+            case let .holdFrom(idx):
+                if idx > 0 {
+                    out.append(contentsOf: buf.prefix(idx))
+                    buf.removeFirst(idx)
+                }
+                return out
+            case .none:
+                out.append(contentsOf: release(keep: 24))
+                return out
+            }
+        }
+    }
+}
+
+/// 录制用 GOP 缓存的上限。Pocket 3 经常几十秒才来一个 IDR；没有上限时每个 AU 都留在数组里。
+nonisolated public enum GOPCacheLimit {
+    public static let maxFrames = 900
+    public static let maxBytes = 48 * 1024 * 1024
+    public static func exceeded(frames: Int, bytes: Int) -> Bool {
+        frames > maxFrames || bytes > maxBytes
     }
 }
 

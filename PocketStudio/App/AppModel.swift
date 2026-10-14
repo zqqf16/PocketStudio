@@ -386,6 +386,7 @@ final class AppModel {
         let l = CameraLink(host: settings.cameraIP, port: deviceProfile.udpPort, transport: transport, profile: deviceProfile)
         Self.configure(l, settings)
         let pipeline = video
+        pipeline.setExpectsLiveViewFrameHeader(deviceProfile.usesLiveViewFrameHeader)
         pipeline.reset()
         l.onVideo = { b in pipeline.ingest(b) }
         l.onSnapshot = { [weak self] s in Task { @MainActor in self?.applySnapshot(s) } }
@@ -626,6 +627,7 @@ final class AppModel {
         link?.stop(); link = nil
         poke.close()
         if isLocalRecording { toggleLocalRecording() }
+        video.setExpectsLiveViewFrameHeader(false)
         video.reset()
         ble.disconnect()
     }
