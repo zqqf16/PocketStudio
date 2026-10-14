@@ -50,6 +50,8 @@
 		ECB2EE612AB50E22B606BE2A /* MainWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B18E84EDF29017B8781981C /* MainWindowController.swift */; };
 		F7CD0C67200AC5D485B9FAE1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 953DDE152524FC7C994DCE95 /* Assets.xcassets */; };
 		FE97E553492E2DA91FAA5CE4 /* StreamRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89D9C3F4C53ED4EA64232D22 /* StreamRecorder.swift */; };
+		4E8A1C0D9B2F4765A1C3E5D7 /* WiFiProvisioning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F2B6D4A1C0E3957B8D6F4A2 /* WiFiProvisioning.swift */; };
+		1A9C3E5B7D2F4860C4E6A8B0 /* WiFiProvisioningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C0E2A4F8B1D3957E5A7C9D1 /* WiFiProvisioningTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -108,6 +110,8 @@
 		EACB7E245E7EE1137DE94401 /* WiFiManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiManager.swift; sourceTree = "<group>"; };
 		F303E03F2E5ADAEAE41294BE /* NWDatagramTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NWDatagramTransport.swift; sourceTree = "<group>"; };
 		FF4BB8BD4DFBF3F2E71D7CE2 /* LiveViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveViewController.swift; sourceTree = "<group>"; };
+		8F2B6D4A1C0E3957B8D6F4A2 /* WiFiProvisioning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiProvisioning.swift; sourceTree = "<group>"; };
+		6C0E2A4F8B1D3957E5A7C9D1 /* WiFiProvisioningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WiFiProvisioningTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -170,6 +174,7 @@
 				824C2BD53D182525E8BD329A /* H264AnnexB.swift */,
 				3045B596FEF04EF2011511D6 /* UDPFrame.swift */,
 				0CDF6DC40C2C94A9EABEE388 /* VideoHealthMonitor.swift */,
+				8F2B6D4A1C0E3957B8D6F4A2 /* WiFiProvisioning.swift */,
 				F5D2F9CAF5383A54D5A4E184 /* Link */,
 			);
 			path = Core;
@@ -182,6 +187,7 @@
 				37617ABEC0C8F8122996FDE8 /* CameraLinkLoopbackTests.swift */,
 				0DBF5C4C2F9978DB02329C25 /* CoreProtocolTests.swift */,
 				3F932ADC7C29ABF0B738A4C2 /* GimbalControlTests.swift */,
+				6C0E2A4F8B1D3957E5A7C9D1 /* WiFiProvisioningTests.swift */,
 			);
 			path = PocketStudioTests;
 			sourceTree = "<group>";
@@ -327,6 +333,7 @@
 				B8B0757AF215F5B14AAB6EDE /* CameraLinkLoopbackTests.swift in Sources */,
 				1E1FEDE6D95087EF2052A8D2 /* CoreProtocolTests.swift in Sources */,
 				19E3C6559A38F2A25C1235B3 /* GimbalControlTests.swift in Sources */,
+				1A9C3E5B7D2F4860C4E6A8B0 /* WiFiProvisioningTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -371,6 +378,7 @@
 				690221E285CFA3735C043D5B /* VideoPipeline.swift in Sources */,
 				B3ABD7429B52B626A9D28D9E /* VideoView.swift in Sources */,
 				3709D07282A8C4C1AA6C9898 /* WiFiManager.swift in Sources */,
+				4E8A1C0D9B2F4765A1C3E5D7 /* WiFiProvisioning.swift in Sources */,
 				BA32CA6635A166A3A5223345 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

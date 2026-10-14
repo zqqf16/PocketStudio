@@ -33,6 +33,7 @@ PocketStudio/
     GimbalProtocol.swift    云台负载构造（速度、绝对角度、模式）
     GimbalSpeedController.swift  云台速度状态机：轴顺序 / 反转 / 可靠停止 / 看门狗 / nudge
     DJIBLEMessage.swift     DJI BLE 帧、广播识别、配对 / Wi-Fi / RTMP 命令
+    WiFiProvisioning.swift  0x07/0x07、0x07/0x0E 回复解析、读取状态机、扫描重试、日志打码
     H264AnnexB.swift        Annex-B → NAL → 访问单元（AVCC）
     Link/DatagramTransport.swift  传输协议 + BSD socket 实现（兼容模式）
     Link/CameraLink.swift   把 DJISessionCore + 传输 + 定时器 组装在一个串行 queue 上
@@ -50,13 +51,13 @@ PocketStudio/
     HelpViewController / SettingsWindowController / OnboardingWindowController
     VideoView（AVSampleBufferDisplayLayer）/ JoystickView / UIKitHelpers（UI 工厂方法）
   Resources/  Info.plist、PocketStudio.entitlements、Assets.xcassets
-PocketStudioTests/  CoreProtocolTests、CameraLinkLoopbackTests（本地 UDP 假相机）、GimbalControlTests
+PocketStudioTests/  CoreProtocolTests、CameraLinkLoopbackTests（本地 UDP 假相机）、GimbalControlTests、WiFiProvisioningTests
 ```
 
 ## 4. 数据流
 
-1. **BLE 唤醒**（`BLEManager`，可在设置中跳过）：厂商 ID 小端 `AA 08`（即 0x08AA；Xtra 为 `AA F7`）+ 型号字节 `20` Pocket 3 / `21` Pocket 4 / `22` Pocket 4P（后两个来自 OpenPocketCine 表，未实机确认）。没有厂商数据时用广播名（`OsmoPocket3` / `4` / `4P`，先匹配 4P）。扫描不会在第一台 0x20 出现后 0.5 秒结束，并记录厂商数据原始字节。订阅 `FFF4`、写 `FFF5`，配对 id `0x8092`。PIN 先 `mbln`（Pocket 3：任何应答都继续）；超时再试 `osmo`（`00 01` 已配对、`00 02` 请在相机上点允许；`00 06` 不是确认）。相机约 20 秒后开启 Wi-Fi。加入 Wi-Fi 期间 **保持蓝牙连接**，成功后断开。UDP 端口在机型里：DJI `9004`，Xtra `10004`。
-2. **加入 Wi-Fi**（`WiFiManager`）：CoreWLAN `scanForNetworks` + `associate`（需要定位权限才能读 SSID）。失败则降级为「手动加入」引导，轮询 getifaddrs 等待获得 `192.168.2.x` 地址（不依赖定位权限）。
+1. **BLE 唤醒**（`BLEManager`，可在设置中跳过）：厂商 ID 小端 `AA 08`（即 0x08AA；Xtra 为 `AA F7`）+ 型号字节 `20` Pocket 3 / `21` Pocket 4 / `22` Pocket 4P（后两个来自 OpenPocketCine 表，未实机确认）。没有厂商数据时用广播名（`OsmoPocket3` / `4` / `4P`，先匹配 4P）。扫描不会在第一台 0x20 出现后 0.5 秒结束，并记录厂商数据原始字节。订阅 `FFF4`、写 `FFF5`，配对 id `0x8092`。PIN 先 `mbln`（Pocket 3：任何应答都继续）；超时再试 `osmo`（`00 01` 已配对、`00 02` 请在相机上点允许；`00 06` 不是确认）。配对成功，或收到相机 0x07/0x46 并回 ACK 之后，若设置「自动获取 Wi‑Fi」开启（默认开）：经同一条 FFF5/FFF4 发 **0x07/0x07**（SSID）和 **0x07/0x0E**（密码）。请求负载按空处理（**未实机验证**），两次写间隔 200ms。回复按 `[status][len][utf8]` 解析；0xE4 或读失败时 SSID 改用蓝牙广播名；解析不成可打印 UTF-8 则视为可能加密，改手动输入。热点未开时每项最多 3 次、从开始起约 20 秒。凭据按外设 UUID 写入钥匙串；广播名和缓存 SSID 不一致就重读；加入失败清缓存。手填名称/密码只在关掉自动获取时覆盖。加入 Wi-Fi 期间 **保持蓝牙连接**，成功后断开。UDP 端口在机型里：DJI `9004`，Xtra `10004`。
+2. **加入 Wi-Fi**（`WiFiManager`）：先请求定位权限（`CLLocationManager.requestWhenInUseAuthorization`，Info.plist 已有 `NSLocationWhenInUseUsageDescription` / `NSLocationUsageDescription`）。然后 CoreWLAN `scanForNetworks(withName:)` + `associate(to:password:)`，90 秒内约每 5 秒重扫（5.8 GHz 信标慢），关联被拒绝连续 3 次就停。成功以 getifaddrs 拿到 `192.168.2.x` 为准（加入后等 15 秒）。失败则降级为「手动加入」引导，连接页显示「失败：…」。
 3. **UDP 握手**（`CameraLink`/`DJISessionCore`）：向 `192.168.2.1` 的机型端口（默认 9004，Xtra 10004）发送握手包（type 0x00），采用相机回复中的 session ID。
 4. **保活**（握手成功后）：ACK 每 20ms（type 0x04，带 video/telemetry/cmd 接收序号）；Camera:0x8E 1Hz（每 2 拍附 0xA0、每 5 拍附 0x61）。默认另发 **General:0x0E** 1Hz（空负载 request → Camera）。设置可切回旧版 **General:0x4F** 1Hz（版本配置分块读取，见 §5g）。云台速度只在有输入时发，硬上限 25Hz。
 5. **视频启动**（握手后 0.5s）：PUSH General:0x88 → DM368(1)；WRITE General:0x81 / 0x82 → DM368(2)（「客户端注册」）。之后 **0x88 保持 1Hz**、0x81/0x82 每 5s（OpenPocketCine：最后一次注册后约 8–10s 视频停止）。**默认不发送 0x4F**（它不是视频心跳，启动序列也不含它，见 §5g）。同时发送 **0x03/0xDA 云台初始化** `05 FF FF FF FF` → type 3 id 0（1s、3s 补发）。
@@ -190,6 +191,20 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
 5. 切换拍照 / 实况 / 录像后的「切换模式」行和「相机应答 · 切换模式」。Pocket 4 的模式号是暂用 Pocket 3 的；4P 的录像 / 延时也是暂用。
 6. 云台上下左右各拨一下后的现象（方向是否和 Pocket 3 一致）。诊断行在「保活」之后还有「型号 · 编码 · 帧头 · UDP」。
 
+## 5i. 自动读取相机 Wi-Fi（Mimo 式，2026-10-14）
+
+配对（`pair()`，仍是先 `mbln` 再 `osmo`）返回「已配对」，或通知里出现 0x07/0x46 并已回 ACK 之后，`BLEManager.readWiFiCredentials` 跑 `WiFiCredentialFetcher`：
+
+- 等 1.5s → 0x07/0x07 → 0x07/0x0E。事务 id 从 `0x8100` 递增，`sendAndWait` 仍按 id 匹配。0x46 不占用这条应答槽。
+- 请求：target `0x0702`，type `0x070740` / `0x0E0740`（线上 `40 07 07` / `40 07 0E`），**负载空**。空负载是推测，日志里打原始请求 hex，并注明未实机验证。
+- 回复：`payload[0]==0` 且 `payload[1]` 等于后续字节数，并能解码成可打印 UTF-8（SSID ≤32 字节，密码 ≤63）才采纳。`0xE4` = 热点未开。其它 ≤4 字节的非零状态可重试。长度不符、非法 UTF-8、控制字符、更长的二进制 = **无法解析**，立刻停止（Mimo 2.12.1 在 0x12/0x92 之后可能加密，算法未知）。
+- SSID 失败或 0xE4：改用蓝牙广播名（占位名「DJI 设备」不算），密码照读。密码 0xE4/超时：最多 3 次，间隔 1s，从 start 起 20s 封顶。
+- 密码应答日志只留状态和长度，正文打成 `••••`。`AppModel.log` 也会把当前密码从文本和 hex 里抹掉。
+- 钥匙串账户 `wifi.<peripheral UUID>`。广播名 ≠ 缓存 SSID 时丢掉缓存重读。`associate` 失败、扫不到、或 15s 内没有 192.168.2.x，清掉这条缓存（定位被拒或没有 Wi-Fi 网卡不清）。手填项只在「自动获取 Wi‑Fi」关闭且两项都填了时使用。
+- 加入：`scanForNetworks(withName:)` → `associate(to:password:)`。`WiFiScanRetry`：90s、间隔 5s；关联失败 3 次停止。定位用已有的 `NSLocationWhenInUseUsageDescription` / `NSLocationUsageDescription`，连接时若未决定会再请求一次。
+
+**未实机验证**：0x07/0x07 与 0x07/0x0E 的请求负载是不是真的空；Pocket 3/4 当前固件的回复是明文还是 0x12/0x92 加密；0x07/0x46 的 ACK（本应用用 flags 0xC0、负载 `00`、原事务 id）相机是否接受。
+
 ## 6. 并发 / 隔离约定（Swift 6.2）
 
 - 工程设置：`SWIFT_VERSION 6.0`、`SWIFT_STRICT_CONCURRENCY complete`、`SWIFT_DEFAULT_ACTOR_ISOLATION MainActor`、Approachable Concurrency（`NonisolatedNonsendingByDefault`、`InferIsolatedConformances`）。
@@ -205,7 +220,7 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
 ## 7. 构建与测试
 
 - **macOS**：Xcode 26 / macOS 26 SDK。`brew install xcodegen && xcodegen generate`，打开 `PocketStudio.xcodeproj`，选择签名团队后运行。部署目标 macOS 26.0。未开启 App Sandbox（CoreWLAN 加入网络在沙盒中受限）。
-- **测试**：Xcode 中 ⌘U；或 `Tools/run-linux-tests.sh`（Swift 6.2+，`-warnings-as-errors`，默认 MainActor 隔离）；`ISOLATION=nonisolated Tools/run-linux-tests.sh` 测另一种默认值。当前 49 个协议层测试（含机型档、HEVC、链路保活调度与 Camera:0xB3）。
+- **测试**：Xcode 中 ⌘U；或 `Tools/run-linux-tests.sh`（Swift 6.2+，`-warnings-as-errors`，默认 MainActor 隔离）；`ISOLATION=nonisolated Tools/run-linux-tests.sh` 测另一种默认值。当前 65 个协议层测试（含机型档、HEVC、链路保活调度、Camera:0xB3，以及 Wi-Fi 回复解析 / 读取状态机 / 打码）。两种默认隔离都通过。
 - 新增 Swift 文件后需重新 `xcodegen generate`（Linux 上可自行编译 XcodeGen）。
 
 ## 8. 已踩过的坑（及修复）
@@ -228,12 +243,13 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
 
 ## 9. 已验证 / 未验证
 
-- **已验证（Linux，Swift 6.2.3 编译 + 单测）**：CRC、DUML、UDP 头/握手/ACK/命令包与 Python 逐字节一致；状态解析；BLE 帧与识别；H.264 Annex-B 拆分与访问单元组装；HEVC 参数集识别、IRAP 16–21 关键帧、`00 00 01 ff` 帧头剥离与 Pocket 3 Annex-B 原样通过；机型识别（0x20/0x21/0x22、广播名、Xtra 端口 10004）；模式表（Pocket 3 拍照 05，4P 拍照 0x17 / 实况 0x4D，Pocket 4 复用 Pocket 3）；4/4P 不把 0x80/0xDC 当成 SD 容量；默认保活发 General:0x0E、不发 0x4F，旧版可切回；关键帧同时发 0x09/0xA8 与 Camera:0xB3；`CameraLink` 与本地假相机的完整回环（握手、ACK、心跳、视频、注册、拍照、云台）；云台轴映射 / 停止 / 看门狗。
+- **已验证（Linux，Swift 6.2.3 编译 + 单测）**：CRC、DUML、UDP 头/握手/ACK/命令包与 Python 逐字节一致；状态解析；BLE 帧与识别；H.264 Annex-B 拆分与访问单元组装；HEVC 参数集识别、IRAP 16–21 关键帧、`00 00 01 ff` 帧头剥离与 Pocket 3 Annex-B 原样通过；机型识别（0x20/0x21/0x22、广播名、Xtra 端口 10004）；模式表（Pocket 3 拍照 05，4P 拍照 0x17 / 实况 0x4D，Pocket 4 复用 Pocket 3）；4/4P 不把 0x80/0xDC 当成 SD 容量；默认保活发 General:0x0E、不发 0x4F，旧版可切回；关键帧同时发 0x09/0xA8 与 Camera:0xB3；`CameraLink` 与本地假相机的完整回环（握手、ACK、心跳、视频、注册、拍照、云台）；云台轴映射 / 停止 / 看门狗。Wi-Fi：`[status][len][utf8]` 解析、0xE4、非法 UTF-8 视为不可读、读取状态机（3 次 / 20 秒、广播名回退、加密即停、写间隔 200ms）、手动/缓存选择、扫描重试 90 秒、密码打码。这些是纯逻辑测试，没有相机。
 - **实机已确认（用户反馈）**：应用可在真实 Pocket 3 上构建运行；云台轴顺序 `[pitch, roll, yaw]`。Pocket 4 / 4P **没有**用本应用实机确认。
 - **依据第三方实机抓包（OpenPocketCine）但本应用尚未实机复测**：相机快门/录像/模式命令、云台回中/模式/翻转/转速、0x03/0xDA 初始化、0x80/0x05 新解析、GOP 缓存录制；Pocket 4/4P 的型号字节 0x21/0x22、PIN `osmo`、HEVC 预览、16 字节帧头、4P 拍照 0x17 / 实况 0x4D / 慢动作 0x00、Xtra UDP 10004。SuperPhoto（`0x02/0x12`，快门 `0F`）只记在常量里，**不发送**。
 - **未在 Linux 编译、仅人工审阅**：所有 `Platform/`、`App/`、`Views/` 文件（用户已在 Xcode 26 编译通过的版本之后的改动：云台 UI 停止钩子、`LocalNetworkPermission`）。
 - **未实机验证**：云台方向正负（反转开关默认关）；roll 字段（@2，OPC 用四元数求）；BLE RTMP 直播流程；CoreWLAN 自动加入在各系统版本上的表现；本地网络授权检测（拒绝码 -65570 的实际触发）；MP4 录制的时间戳与 QuickTime 兼容性。
 - **未实机验证（§5g）**：默认停发 0x4F 后画面是否仍能靠 0x88 维持；General:0x0E 空负载发往 Camera(1,0) 是否被 Pocket 3 接受（应答负载未知）；Camera:0xB3 空负载是否请求到 IDR。设置「Mimo 链路心跳」默认开，关掉即恢复旧版 0x4F，供 A/B。
+- **未实机验证（§5i）**：0x07/0x07、0x07/0x0E 的请求负载是否为空（日志会打原始请求 hex）；回复在当前 Pocket 3/4 固件上是明文还是 0x12/0x92 加密；0x07/0x46 ACK（flags 0xC0、负载 `00`）是否被接受。解析、重试和打码只在 Linux 单测里验证过。
 
 ## 10. TODO / 开放问题
 
@@ -241,6 +257,7 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
 - [未发送] Pocket 4P SuperPhoto：公开资料是拍照模式 0x17 内的 `0x02/0x12`（标准 `00` / 超清 `04`，画幅第二字节）和快门 `0F`，不是单独的 0xE1。实机确认前不发。
 - [未知、暂用 Pocket 3、不扫描] Pocket 4 的全部 0xE1；Pocket 4P 的录像 / 延时 / 移动延时 / 全景 / 夜景。
 - [未实测] 退出回放命令能否让 Pocket 3 在拍照后恢复实时流；TCP 7001 戳对重连成功率的实际影响；bit18/19 = 拍照处理中 只是推断。4/4P 上退出回放同样未验证。
+- [未实测] §5i 自动 Wi-Fi：看日志里「Wi-Fi 读取请求 0x07/0x07」的 raw 是不是空负载、应答 payload 是 `00 <len> <utf8>` 还是一长串二进制（加密）。0xE4 时应出现「名称来自蓝牙广播」。加入失败后钥匙串条目应被删掉，下次会重新读。
 - [未实测] §5g 保活 A/B：默认 Mimo（日志「链路保活：Mimo」，诊断 `保活 0x0E`）连着拖云台至少 2 分钟，看「相机应答 n/s」是否保持、画面是否停；再关掉设置项（日志「链路保活：旧版」，诊断 `保活 旧0x4F`）复测一轮。看门狗或解码恢复时应出现「请求关键帧（0x09/0xA8 + Camera:0xB3）」以及是否有「相机应答 · 关键帧 Camera:0xB3」（记下 payload / 错误码）。前几条 0x0E 应答的 payload 也请留下。
 - 若拍照后仍黑屏：看日志「相机处于回放 → 发送退出回放」后 0x80 bit30 是否清除、是否有 0x02/0x0C 应答。
 

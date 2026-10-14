@@ -29,6 +29,7 @@ nonisolated enum WiFiJoinError: LocalizedError, Sendable {
 @MainActor
 final class WiFiManager: NSObject, @preconcurrency CLLocationManagerDelegate {
     private let location = CLLocationManager()
+    private var authWaiters: [CheckedContinuation<Bool, Never>] = []
     var onAuthorizationChange: (() -> Void)?
 
     override init() {
@@ -49,7 +50,31 @@ final class WiFiManager: NSObject, @preconcurrency CLLocationManagerDelegate {
 
     func requestLocationAuthorization() { location.requestWhenInUseAuthorization() }
 
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) { onAuthorizationChange?() }
+    /// 还没决定时弹出系统框并等待。已拒绝则立刻返回 false，调用方改走手动加入。
+    func ensureLocationAuthorization(timeout: TimeInterval = 25) async -> Bool {
+        if locationAuthorized { return true }
+        let status = location.authorizationStatus
+        if status == .denied || status == .restricted { return false }
+        requestLocationAuthorization()
+        if locationAuthorized { return true }
+        return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+            authWaiters.append(c)
+            if locationAuthorized { drainAuthWaiters(); return }
+            mainAfter(timeout) { [weak self] in self?.drainAuthWaiters() }
+        }
+    }
+
+    private func drainAuthWaiters() {
+        let waiters = authWaiters
+        authWaiters = []
+        let ok = locationAuthorized
+        waiters.forEach { $0.resume(returning: ok) }
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        drainAuthWaiters()
+        onAuthorizationChange?()
+    }
 
     /// 本机所有 IPv4 地址（接口名, 地址）
     nonisolated static func ipv4Addresses() -> [(String, String)] {
@@ -82,11 +107,38 @@ final class WiFiManager: NSObject, @preconcurrency CLLocationManagerDelegate {
         Self.ipv4Addresses().first { $0.1.hasPrefix("192.168.2.") }.map { "\($0.0) \($0.1)" }
     }
 
-    /// 程序化加入（阻塞操作在后台执行）
+    /// 程序化加入。扫描在 90 秒内每约 5 秒重试一次（5.8 GHz 信标可能很慢）。
+    /// 阻塞的扫描/关联在后台执行，并在闭包内重新获取 CWInterface。
     func join(ssid: String, password: String) async throws {
-        guard let iface = interface, iface.powerOn() else { throw WiFiJoinError.noInterface }
-        _ = iface
-        // 后台执行阻塞的扫描/关联；在闭包内重新获取 CWInterface，不跨隔离域传递非 Sendable 对象。
+        guard locationAuthorized else { throw WiFiJoinError.locationDenied }
+        guard interface?.powerOn() == true else { throw WiFiJoinError.noInterface }
+        let started = Date()
+        var retry = WiFiScanRetry()
+        var last: Error = WiFiJoinError.networkNotFound(ssid)
+        while true {
+            try Task.checkCancellation()
+            do {
+                try await associateOnce(ssid: ssid, password: password)
+                return
+            } catch let error as WiFiJoinError {
+                last = error
+                let kind: WiFiScanRetry.Failure
+                switch error {
+                case .networkNotFound: kind = .notFound
+                case .associate: kind = .associate
+                case .noInterface, .locationDenied: throw error
+                }
+                retry.elapsed = Date().timeIntervalSince(started)
+                switch retry.record(kind) {
+                case .stop: throw last
+                case let .retryAfter(dt):
+                    try await Task.sleep(nanoseconds: UInt64(dt * 1_000_000_000))
+                }
+            }
+        }
+    }
+
+    private func associateOnce(ssid: String, password: String) async throws {
         try await Task.detached(priority: .userInitiated) { () throws -> Void in
             guard let iface = CWWiFiClient.shared().interface() else { throw WiFiJoinError.noInterface }
             let nets: Set<CWNetwork>

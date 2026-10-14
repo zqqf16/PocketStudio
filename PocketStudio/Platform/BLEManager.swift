@@ -56,6 +56,10 @@ final class BLEManager: NSObject, @preconcurrency CBCentralManagerDelegate, @pre
     private var reassembler = DJIBLEReassembler()
     /// 配对成功时实际使用的 PIN。TCP 7001 戳一下用同一个，避免和蓝牙配对身份不一致。
     private(set) var activePairPIN = DJIBLE.pairPIN
+    /// 相机主动发来的 0x07/0x46。和 pair() 的应答分开等，避免改配对状态机。
+    private var confirmContinuation: CheckedContinuation<Bool, Never>?
+    private var confirmSeen = false
+    private var nextWiFiMessageID: UInt16 = 0x8100
 
     var onLog: ((String) -> Void)?
     var onBattery: ((Int) -> Void)?
@@ -152,6 +156,11 @@ final class BLEManager: NSObject, @preconcurrency CBCentralManagerDelegate, @pre
         p.delegate = self
         notifyChar = nil; writeChar = nil
         reassembler = DJIBLEReassembler()
+        confirmSeen = false
+        if let pending = confirmContinuation {
+            confirmContinuation = nil
+            pending.resume(returning: false)
+        }
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
             connectContinuation = c
             central.connect(p, options: nil)
@@ -212,6 +221,10 @@ final class BLEManager: NSObject, @preconcurrency CBCentralManagerDelegate, @pre
             do {
                 let m = try DJIBLE.parse(frame)
                 if let b = DJIBLE.battery(from: m), b <= 100 { battery = b; onBattery?(b); log("电池：\(b)%") }
+                if WiFiProvisioning.isPairingConfirmation(m) {
+                    acknowledgePairingConfirmation(m)
+                    continue
+                }
                 if let w = responseWaiter, w.id == m.id { responseWaiter = nil; w.cont.resume(returning: m) }
             } catch {
                 log("BLE 收到损坏数据：\(frame.hexString()) — \(error)")
@@ -269,6 +282,69 @@ final class BLEManager: NSObject, @preconcurrency CBCentralManagerDelegate, @pre
             return false
         case .notApproval:
             throw BLEError.connectFailed("PIN「osmo」应答 \(r.payload.hexString(separator: " ")) 不是配对成功（00 06 不是屏幕确认）")
+        }
+    }
+
+    /// 配对应答不是「已经配对」时，等相机的 0x07/0x46 并回 ACK。超时返回 false，调用方仍可继续读 Wi-Fi。
+    func awaitPairingConfirmation(timeout: TimeInterval = 6) async -> Bool {
+        if confirmSeen { return true }
+        return await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+            confirmContinuation = c
+            mainAfter(timeout) { [weak self] in
+                guard let self, let pending = self.confirmContinuation else { return }
+                self.confirmContinuation = nil
+                pending.resume(returning: self.confirmSeen)
+            }
+        }
+    }
+
+    private func acknowledgePairingConfirmation(_ m: DJIBLEMessage) {
+        confirmSeen = true
+        let ack = WiFiProvisioning.pairingConfirmationAck(for: m)
+        log("收到相机配对确认 0x07/0x46 id=\(String(format: "0x%04X", m.id)) payload=\(m.payload.hexString(separator: " "))，回 ACK \(DJIBLE.build(ack).hexString(separator: " "))")
+        do { try send(ack) } catch { log("配对确认 ACK 发送失败：\(error.localizedDescription)") }
+        if let pending = confirmContinuation {
+            confirmContinuation = nil
+            pending.resume(returning: true)
+        }
+    }
+
+    /// 配对完成后读 SoftAP 名称和密码。请求负载为空（未实机验证），写间隔由状态机保持在 200ms。
+    func readWiFiCredentials(advertisedName: String?) async -> Result<WiFiCredentials, WiFiFetchFailure> {
+        var fetcher = WiFiCredentialFetcher(nextID: nextWiFiMessageID)
+        var now = ProcessInfo.processInfo.systemUptime
+        var action = fetcher.start(advertisedName: advertisedName, now: now)
+        while true {
+            if Task.isCancelled { return .failure(.timedOut) }
+            switch action {
+            case let .wait(dt):
+                let slice = min(max(dt, 0), 30)
+                try? await Task.sleep(nanoseconds: UInt64(slice * 1_000_000_000))
+                now = ProcessInfo.processInfo.systemUptime
+                action = fetcher.advance(now: now)
+            case let .send(query, id):
+                nextWiFiMessageID = id &+ 1
+                let msg = WiFiProvisioning.message(id: id, query: query)
+                let raw = DJIBLE.build(msg)
+                log("Wi-Fi 读取请求 \(query.commandName) id=\(String(format: "0x%04X", id)) payload=空（未实机验证） raw=\(raw.hexString(separator: " "))")
+                do {
+                    let reply = try await sendAndWait(msg, timeout: WiFiProvisioning.requestTimeout)
+                    log("Wi-Fi 读取应答 \(query.commandName) id=\(String(format: "0x%04X", reply.id)) payload=\(WiFiLogMask.hexDump(reply.payload, query: query))")
+                    now = ProcessInfo.processInfo.systemUptime
+                    action = fetcher.receive(query: query, payload: reply.payload, now: now)
+                } catch {
+                    log("Wi-Fi 读取超时 \(query.commandName)：\(error.localizedDescription)")
+                    now = ProcessInfo.processInfo.systemUptime
+                    action = fetcher.timedOut(query: query, now: now)
+                }
+            case let .success(creds):
+                let src = creds.ssidFromAdvertisement ? "（名称来自蓝牙广播，0x07/0x07 失败或返回 0xE4）" : ""
+                log("已读取相机 Wi-Fi「\(creds.ssid)」\(src)，密码 \(WiFiLogMask.bullets(creds.password))")
+                return .success(creds)
+            case let .failure(reason):
+                log("读取相机 Wi-Fi 失败：\(reason.userMessage)")
+                return .failure(reason)
+            }
         }
     }
 
