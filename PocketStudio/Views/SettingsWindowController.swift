@@ -15,6 +15,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     private let format = NSPopUpButton()
     private let axisOrder = NSPopUpButton()
     private let folderLabel = UI.label("", size: 12, color: .secondaryLabelColor)
+    private lazy var autoWiFi = UI.checkbox("自动获取 Wi‑Fi（配对后从相机读取名称和密码）", on: s.autoFetchWiFi, target: self, action: #selector(save))
     private lazy var wifiOnly = UI.checkbox("仅通过 Wi-Fi 网卡发送（推荐）", on: s.wifiInterfaceOnly, target: self, action: #selector(save))
     private lazy var scroll = UI.checkbox("触控板双指滑动控制云台", on: s.trackpadScrollControl, target: self, action: #selector(save))
     private lazy var drag = UI.checkbox("在画面上拖动控制云台", on: s.dragOnVideoControl, target: self, action: #selector(save))
@@ -29,7 +30,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     private lazy var showPw = UI.checkbox("显示密码", on: false, target: self, action: #selector(togglePw))
 
     init() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 920), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 980), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         w.title = "设置"
         super.init(window: w)
         build()
@@ -58,7 +59,8 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
 
         let grid = NSGridView(views: [
             [UI.headline("相机"), NSGridCell.emptyContentView],
-            [UI.label("Wi-Fi 名称"), field(ssid, 260, "例如 OsmoPocket3-D6B1 或 OsmoPocket4P-XXXX")],
+            [NSGridCell.emptyContentView, autoWiFi],
+            [UI.label("Wi-Fi 名称"), field(ssid, 260, "关闭自动获取时填写，例如 OsmoPocket3-D6B1")],
             [UI.label("Wi-Fi 密码"), pwStack],
             [UI.label("相机 IP"), field(ip, 140)],
             [UI.label("蓝牙扫描（秒）"), field(bleTimeout, 60)],
@@ -86,8 +88,8 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         grid.rowSpacing = 10
         grid.columnSpacing = 12
         grid.column(at: 0).xPlacement = .trailing
-        for r in [0, 6, 9, 12] { grid.row(at: r).topPadding = r == 0 ? 0 : 10; grid.cell(atColumnIndex: 0, rowIndex: r).xPlacement = .leading }
-        let note = UI.wrappingLabel("密码保存在系统钥匙串中。修改网络设置后需重新连接才会生效。链路心跳切换后立即生效：默认每秒发送 General:0x0E，并停止周期读取版本配置 0x4F；取消勾选则恢复旧版 0x4F。连接日志会写明当前模式。", size: 11)
+        for r in [0, 7, 10, 13] { grid.row(at: r).topPadding = r == 0 ? 0 : 10; grid.cell(atColumnIndex: 0, rowIndex: r).xPlacement = .leading }
+        let note = UI.wrappingLabel("「自动获取 Wi‑Fi」开启时，配对成功后向相机读取热点名称和密码，并按设备保存在钥匙串；加入失败会清掉缓存，下次重读。关掉之后，才使用上面手填的名称和密码。修改网络设置后需重新连接才会生效。链路心跳切换后立即生效：默认每秒发送 General:0x0E，并停止周期读取版本配置 0x4F；取消勾选则恢复旧版 0x4F。", size: 11)
         let stack = UI.vstack([grid, note], spacing: 16)
         let content = NSView()
         content.addSubview(stack)
@@ -127,6 +129,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         s.apWaitSeconds = max(0, Double(apWait.stringValue) ?? 20)
         s.transport = TransportKind.allCases[max(0, transport.indexOfSelectedItem)]
         s.recordingFormat = RecordingFormat.allCases[max(0, format.indexOfSelectedItem)]
+        s.autoFetchWiFi = autoWiFi.state == .on
         s.wifiInterfaceOnly = wifiOnly.state == .on
         s.trackpadScrollControl = scroll.state == .on
         s.dragOnVideoControl = drag.state == .on

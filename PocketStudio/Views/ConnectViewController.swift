@@ -10,6 +10,7 @@ final class ConnectViewController: NSViewController {
     private lazy var skipBLE = UI.checkbox("跳过蓝牙（相机 Wi-Fi 已经开启）", on: model.settings.skipBLE, target: self, action: #selector(optionsChanged))
     private lazy var skipWiFi = UI.checkbox("跳过加入 Wi-Fi（Mac 已连上相机热点）", on: model.settings.skipWiFi, target: self, action: #selector(optionsChanged))
     private let ssidLabel = UI.label("", size: 13, weight: .medium)
+    private let provisionLabel = UI.wrappingLabel("", size: 12)
     private let networkLabel = UI.label("", size: 12, color: .secondaryLabelColor)
     private let manualReason = UI.wrappingLabel("")
     private var manualCard: NSView!
@@ -24,7 +25,7 @@ final class ConnectViewController: NSViewController {
         // 目标网络
         let editBtn = UI.button("修改…", symbol: "pencil", target: self, action: #selector(openSettings))
         let netRow = UI.hstack([NSImageView(image: UI.symbol("wifi", size: 14) ?? NSImage()), ssidLabel, editBtn], spacing: 8)
-        stack.addArrangedSubview(CardView(UI.vstack([netRow, networkLabel, skipBLE, skipWiFi], spacing: 8)))
+        stack.addArrangedSubview(CardView(UI.vstack([netRow, provisionLabel, networkLabel, skipBLE, skipWiFi], spacing: 8)))
 
         // 步骤
         let steps = UI.vstack([], spacing: 10)
@@ -111,8 +112,20 @@ final class ConnectViewController: NSViewController {
 
     private func refresh() {
         let s = model.settings
-        ssidLabel.stringValue = s.ssid.isEmpty ? "尚未设置相机 Wi-Fi 名称" : "相机 Wi-Fi：\(s.ssid)"
-        ssidLabel.textColor = s.ssid.isEmpty ? .systemOrange : .labelColor
+        let name = model.displayedSSID
+        if !name.isEmpty {
+            ssidLabel.stringValue = "相机 Wi-Fi：\(name)"
+            ssidLabel.textColor = .labelColor
+        } else if s.autoFetchWiFi {
+            ssidLabel.stringValue = "将在配对后自动读取相机 Wi-Fi"
+            ssidLabel.textColor = .labelColor
+        } else {
+            ssidLabel.stringValue = "尚未设置相机 Wi-Fi 名称"
+            ssidLabel.textColor = .systemOrange
+        }
+        provisionLabel.stringValue = model.wifiProvisionStatus
+        provisionLabel.isHidden = model.wifiProvisionStatus.isEmpty
+        provisionLabel.textColor = model.wifiProvisionStatus.hasPrefix("失败") ? .systemRed : .secondaryLabelColor
         let cur = model.wifi.currentSSID
         let addr = model.wifi.localCameraNetworkAddress
         networkLabel.stringValue = "当前 Wi-Fi：\(cur ?? (model.wifi.locationAuthorized ? "未连接" : "（未授权定位，无法读取名称）"))" + (addr.map { "  ·  相机网段地址：\($0)" } ?? "")
@@ -158,8 +171,8 @@ final class ConnectViewController: NSViewController {
         model.settings.skipBLE = skipBLE.state == .on
         model.settings.skipWiFi = skipWiFi.state == .on
     }
-    @objc private func copySSID() { UI.copyToPasteboard(model.settings.ssid); model.log("已拷贝 Wi-Fi 名称") }
-    @objc private func copyPassword() { UI.copyToPasteboard(model.settings.password); model.log("已拷贝 Wi-Fi 密码") }
+    @objc private func copySSID() { UI.copyToPasteboard(model.displayedSSID); model.log("已拷贝 Wi-Fi 名称") }
+    @objc private func copyPassword() { UI.copyToPasteboard(model.displayedPassword); model.log("已拷贝 Wi-Fi 密码") }
     @objc private func openWiFi() { WiFiManager.openWiFiSettings() }
     @objc private func recheck() { model.manualWiFiRecheck() }
     @objc private func openSettings() { NSApp.sendAction(#selector(AppDelegate.showSettings(_:)), to: nil, from: self) }

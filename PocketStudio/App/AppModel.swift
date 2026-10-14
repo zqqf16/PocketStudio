@@ -69,6 +69,17 @@ final class AppModel {
 
     /// 手动加入 Wi-Fi 引导状态（程序化加入失败时显示）
     private(set) var manualWiFiReason: String?
+    /// 连接页上的「读取中 / 加入中 / 失败：…」
+    private(set) var wifiProvisionStatus: String = ""
+    private var activeSSID = ""
+    private var activePassword = ""
+    private var activeDeviceID = ""
+    private var credentialSource: WiFiCredentialOrigin = .none
+    private enum WiFiCredentialOrigin { case none, manual, cache, camera }
+
+    /// 这一次连接实际使用的热点。还没读到时回落到设置里的手填值。
+    var displayedSSID: String { activeSSID.isEmpty ? settings.ssid : activeSSID }
+    var displayedPassword: String { activePassword.isEmpty ? settings.password : activePassword }
     private var manualWiFiCheckRequested = false
 
     private var connectTask: Task<Void, Never>?
@@ -141,8 +152,12 @@ final class AppModel {
     }
 
     func log(_ s: String) {
+        var text = s
+        for secret in [activePassword, settings.password] where secret.count >= 4 {
+            text = WiFiLogMask.redact(secret, in: text)
+        }
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
-        textLog.append("\(f.string(from: Date()))  \(s)")
+        textLog.append("\(f.string(from: Date()))  \(text)")
         if textLog.count > 1000 { textLog.removeFirst(textLog.count - 1000) }
         NotificationCenter.default.post(name: .logAppended, object: self)
     }
@@ -194,8 +209,12 @@ final class AppModel {
     func connect() {
         guard !isBusy, !isConnected else { return }
         deviceProfile = .unidentified
-        let ssid = settings.ssid
-        if ssid.isEmpty && !settings.skipWiFi {
+        activeSSID = ""
+        activePassword = ""
+        activeDeviceID = ""
+        credentialSource = .none
+        wifiProvisionStatus = ""
+        if settings.ssid.isEmpty && !settings.skipWiFi && !settings.autoFetchWiFi {
             log("尚未填写相机 Wi-Fi 名称，将使用手动加入引导")
         }
         steps = Self.freshSteps()
@@ -226,12 +245,14 @@ final class AppModel {
                     // 与原项目 main.py 一致：蓝牙失败后尝试仅 Wi-Fi
                     guard !s.skipWiFi else { throw error }
                     log("蓝牙激活失败：\(error.localizedDescription)。尝试仅加入 Wi-Fi（相机 Wi-Fi 可能已开启）…")
+                    _ = await obtainCredentials(advertisedName: nil, deviceID: settings.lastBLEDeviceID, allowBLE: false)
                     try await joinWiFiStep()
                     try await reachabilityStep()
                 }
             } else {
                 for i in 0 ... 2 { setStep(i, .skipped, "已跳过") }
                 if !s.skipWiFi {
+                    _ = await obtainCredentials(advertisedName: nil, deviceID: s.lastBLEDeviceID, allowBLE: false)
                     try await joinWiFiStep()
                     try await reachabilityStep()
                 } else {
@@ -296,55 +317,176 @@ final class AppModel {
         setStep(1, .active, "正在与 \(dev.name) 配对…首次配对请在相机屏幕上点「允许」")
         try await ble.connect(dev)
         let already = try await ble.pair()
-        setStep(1, .done, already ? "相机报告：已配对" : "配对请求已发送")
-
-        if !settings.skipWiFi, wifi.isOnCameraNetwork(ssid: settings.ssid, cameraIP: settings.cameraIP) {
-            setStep(2, .skipped, "已在相机网络上，无需等待")
+        if already {
+            setStep(1, .done, "相机报告：已配对")
+        } else if await ble.awaitPairingConfirmation(timeout: 6) {
+            setStep(1, .done, "相机已确认配对")
         } else {
-            let total = Int(settings.apWaitSeconds)
-            for left in stride(from: total, to: 0, by: -1) {
-                setStep(2, .active, "等待相机 Wi-Fi 热点开启… 剩余 \(left) 秒（蓝牙保持连接）")
-                try await Task.sleep(nanoseconds: 1_000_000_000)
-            }
-            setStep(2, .done, "")
+            setStep(1, .done, "配对请求已发送")
         }
-        if !settings.skipWiFi {
+        settings.lastBLEDeviceID = dev.id.uuidString
+        activeDeviceID = dev.id.uuidString
+
+        if settings.skipWiFi {
+            setStep(2, .skipped, "已跳过")
+            setStep(3, .skipped, "已跳过"); setStep(4, .skipped, "已跳过")
+        } else {
+            let polled = await obtainCredentials(advertisedName: dev.name, deviceID: dev.id.uuidString, allowBLE: true)
+            if wifi.isOnCameraNetwork(ssid: displayedSSID, cameraIP: settings.cameraIP) {
+                setStep(2, .skipped, "已在相机网络上，无需等待")
+            } else if polled {
+                setStep(2, .done, "已尝试从相机读取 Wi-Fi")
+            } else {
+                let total = Int(settings.apWaitSeconds)
+                for left in stride(from: total, to: 0, by: -1) {
+                    setStep(2, .active, "等待相机 Wi-Fi 热点开启… 剩余 \(left) 秒（蓝牙保持连接）")
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+                setStep(2, .done, "")
+            }
             try await joinWiFiStep()
             try await reachabilityStep()
-        } else {
-            setStep(3, .skipped, "已跳过"); setStep(4, .skipped, "已跳过")
         }
         log("Wi-Fi 已连接，断开蓝牙")
     }
 
+    /// 决定这次用手填、钥匙串，还是向相机读。返回 true 表示已经做过 BLE 轮询（不必再空等热点）。
+    @discardableResult
+    private func obtainCredentials(advertisedName: String?, deviceID: String, allowBLE: Bool) async -> Bool {
+        if !deviceID.isEmpty { activeDeviceID = deviceID }
+        let cache = WiFiCredentialCache.load(deviceID: deviceID)
+        let plan = WiFiCredentialPlanner.plan(autoFetch: settings.autoFetchWiFi, manualSSID: settings.ssid,
+                                              manualPassword: settings.password, cachedSSID: cache?.ssid,
+                                              cachedPassword: cache?.password, advertisedName: advertisedName)
+        switch plan {
+        case let .manual(ssid, password):
+            adopt(ssid: ssid, password: password, source: .manual)
+            log("使用手动填写的 Wi-Fi「\(ssid)」")
+            return false
+        case let .cached(ssid, password):
+            adopt(ssid: ssid, password: password, source: .cache)
+            log("使用已保存的相机 Wi-Fi「\(ssid)」，密码 \(WiFiLogMask.bullets(password))")
+            return false
+        case let .needsManualEntry(reason):
+            wifiProvisionStatus = "失败：\(reason)"
+            log(reason)
+            changed()
+            return false
+        case .fetch:
+            guard allowBLE, ble.isConnected else {
+                if !settings.ssid.isEmpty {
+                    adopt(ssid: settings.ssid, password: settings.password, source: .manual)
+                    log("当前没有蓝牙连接，改用手动填写的 Wi-Fi「\(settings.ssid)」")
+                } else {
+                    wifiProvisionStatus = "失败：需要蓝牙连接才能自动读取相机 Wi-Fi"
+                    log(wifiProvisionStatus)
+                }
+                changed()
+                return false
+            }
+            wifiProvisionStatus = "读取中"
+            setStep(2, .active, "读取中：正在从相机读取 Wi-Fi 名称和密码（热点未开时最多约 20 秒）")
+            changed()
+            let result = await ble.readWiFiCredentials(advertisedName: advertisedName)
+            switch result {
+            case let .success(creds):
+                WiFiCredentialCache.save(deviceID: deviceID, ssid: creds.ssid, password: creds.password)
+                adopt(ssid: creds.ssid, password: creds.password, source: .camera)
+                wifiProvisionStatus = ""
+                if creds.ssidFromAdvertisement {
+                    log("Wi-Fi 名称用蓝牙广播「\(creds.ssid)」（读取失败或返回 0xE4），密码已写入钥匙串")
+                } else {
+                    log("已从相机读到 Wi-Fi「\(creds.ssid)」，密码已写入钥匙串")
+                }
+            case let .failure(reason):
+                wifiProvisionStatus = "失败：\(reason.userMessage)"
+                log("自动读取失败，改用手动填写或手动加入。\(reason.userMessage)")
+                if !settings.ssid.isEmpty {
+                    adopt(ssid: settings.ssid, password: settings.password, source: .manual)
+                }
+            }
+            changed()
+            return true
+        }
+    }
+
+    private func adopt(ssid: String, password: String, source: WiFiCredentialOrigin) {
+        activeSSID = ssid
+        activePassword = password
+        credentialSource = source
+        changed()
+    }
+
+    /// 只清钥匙串。当前这次手动加入仍能拷贝刚读到的密码；下次连接会重新读。
+    private func clearAutoCache() {
+        guard credentialSource == .cache || credentialSource == .camera else { return }
+        let id = activeDeviceID.isEmpty ? settings.lastBLEDeviceID : activeDeviceID
+        WiFiCredentialCache.clear(deviceID: id)
+        credentialSource = .none
+        log("加入失败，已清除该相机保存在钥匙串中的 Wi-Fi，下次连接会重新读取")
+    }
+
     private func joinWiFiStep() async throws {
-        let ssid = settings.ssid, pw = settings.password, ip = settings.cameraIP
+        let ssid = displayedSSID, pw = displayedPassword, ip = settings.cameraIP
         if wifi.isOnCameraNetwork(ssid: ssid, cameraIP: ip) {
+            wifiProvisionStatus = ""
             setStep(3, .done, "已在相机网络上\(wifi.currentSSID.map { "（\($0)）" } ?? "")"); return
         }
-        setStep(3, .active, "正在加入 \(ssid.isEmpty ? "相机 Wi-Fi" : ssid)…")
-        var reason: String
         if ssid.isEmpty {
-            reason = "尚未在设置中填写相机 Wi-Fi 名称。"
-        } else {
-            do {
-                try await wifi.join(ssid: ssid, password: pw)
-                if await wifi.waitForCameraNetwork(ssid: ssid, cameraIP: ip, timeout: 30) {
-                    setStep(3, .done, "已加入 \(ssid)"); return
-                }
-                reason = "已请求加入，但 30 秒内未获得相机网络地址。"
-            } catch {
-                reason = error.localizedDescription
-                if !wifi.locationAuthorized { reason += " 提示：授予「定位服务」权限后，App 才能按名称找到相机 Wi-Fi。" }
+            let reason = settings.autoFetchWiFi ? "未能自动读到相机 Wi-Fi 名称。" : "尚未在设置中填写相机 Wi-Fi 名称。"
+            try await fallbackManualJoin(reason: reason, ssid: ssid, ip: ip)
+            return
+        }
+        if !wifi.locationAuthorized {
+            wifiProvisionStatus = "加入中"
+            setStep(3, .active, "加入中：请在系统弹窗里允许「定位服务」。macOS 要用它才能看到 Wi-Fi 名称。若已经拒绝，请到系统设置里打开，或按页面上的步骤手动加入。")
+            changed()
+            let allowed = await wifi.ensureLocationAuthorization()
+            if !allowed {
+                try await fallbackManualJoin(reason: "未授予定位权限，无法按名称自动加入「\(ssid)」。请到「系统设置 → 隐私与安全性 → 定位服务」允许 PocketStudio，或按下面的步骤手动加入。", ssid: ssid, ip: ip)
+                return
             }
         }
-        // 降级：手动加入引导
+        wifiProvisionStatus = "加入中"
+        setStep(3, .active, "加入中：正在加入「\(ssid)」（5.8 GHz 热点最多扫描约 90 秒）")
+        changed()
+        do {
+            try await wifi.join(ssid: ssid, password: pw)
+            if await wifi.waitForCameraNetwork(ssid: ssid, cameraIP: ip, timeout: WiFiScanRetry.addressWait) {
+                wifiProvisionStatus = ""
+                setStep(3, .done, "已加入 \(ssid)")
+                return
+            }
+            clearAutoCache()
+            try await fallbackManualJoin(reason: "已请求加入「\(ssid)」，但 \(Int(WiFiScanRetry.addressWait)) 秒内未获得 192.168.2.x 地址。", ssid: ssid, ip: ip)
+        } catch {
+            var reason = error.localizedDescription
+            var clear = true
+            if let join = error as? WiFiJoinError {
+                switch join {
+                case .locationDenied:
+                    reason += " 请到系统设置允许定位，或手动加入。"
+                    clear = false
+                case .noInterface:
+                    clear = false
+                case .networkNotFound, .associate:
+                    clear = true
+                }
+            }
+            if clear { clearAutoCache() }
+            try await fallbackManualJoin(reason: reason, ssid: ssid, ip: ip)
+        }
+    }
+
+    private func fallbackManualJoin(reason: String, ssid: String, ip: String) async throws {
+        wifiProvisionStatus = "失败：\(reason)"
         manualWiFiReason = reason
         setStep(3, .active, "需要手动加入 Wi-Fi：\(reason)")
         log("请按「连接」页面提示手动加入相机 Wi-Fi（最多等待 3 分钟，连上后自动继续）")
         changed()
         let ok = await wifi.waitForCameraNetwork(ssid: ssid, cameraIP: ip, timeout: 180)
         manualWiFiReason = nil
+        if ok { wifiProvisionStatus = "" }
         try Task.checkCancellation()
         guard ok else { throw WiFiJoinError.associate("等待手动加入超时。") }
         setStep(3, .done, "已检测到相机网络")
@@ -352,13 +494,13 @@ final class AppModel {
 
     /// 「我已连接」按钮：立即重新检测
     func manualWiFiRecheck() {
-        if wifi.isOnCameraNetwork(ssid: settings.ssid, cameraIP: settings.cameraIP) { log("已检测到相机网络，继续…") }
+        if wifi.isOnCameraNetwork(ssid: displayedSSID, cameraIP: settings.cameraIP) { log("已检测到相机网络，继续…") }
         else { log("尚未检测到 192.168.2.x 地址。请确认 Mac 菜单栏 Wi-Fi 已选中相机热点。") }
     }
 
     private func reachabilityStep() async throws {
         setStep(4, .active, "检查相机 \(settings.cameraIP)…")
-        let ok = await wifi.waitForCameraNetwork(ssid: settings.ssid, cameraIP: settings.cameraIP, timeout: 10)
+        let ok = await wifi.waitForCameraNetwork(ssid: displayedSSID, cameraIP: settings.cameraIP, timeout: 10)
         if !ok { throw WiFiJoinError.associate("相机不可达：未获得 192.168.2.x 地址") }
         setStep(4, .done, wifi.localCameraNetworkAddress.map { "本机地址 \($0)" } ?? "")
     }
@@ -516,7 +658,7 @@ final class AppModel {
     /// 蓝牙没给出型号时，用用户填写的 Wi-Fi 名称（OsmoPocket4P-XXXX 这类）再认一次。仍没有就按 Pocket 3，避免改变现有连接。
     private func resolveProfile() {
         if deviceProfile.isPocketSeries { return }
-        let named = DeviceProfile.detect(manufacturerData: nil, localName: settings.ssid.isEmpty ? nil : settings.ssid)
+        let named = DeviceProfile.detect(manufacturerData: nil, localName: displayedSSID.isEmpty ? nil : displayedSSID)
         if named.isPocketSeries {
             deviceProfile = named
             log("按 Wi-Fi 名称识别为 \(named.displayName)（UDP \(named.udpPort)）")
@@ -605,16 +747,36 @@ final class AppModel {
                 guard let d = devs.first else { throw BLEError.notFound }
                 deviceProfile = d.profile
                 try await ble.connect(d)
-                _ = try await ble.pair()
+                let already = try await ble.pair()
+                if !already { _ = await ble.awaitPairingConfirmation(timeout: 4) }
+                settings.lastBLEDeviceID = d.id.uuidString
+                activeDeviceID = d.id.uuidString
                 log("蓝牙重新唤醒：\(d.name)（\(d.profile.displayName)）已配对")
+                if activeSSID.isEmpty || activePassword.isEmpty {
+                    _ = await obtainCredentials(advertisedName: d.name, deviceID: d.id.uuidString, allowBLE: true)
+                }
             } catch is CancellationError { throw CancellationError() }
             catch { log("蓝牙唤醒失败（继续尝试 Wi-Fi）：\(error.localizedDescription)") }
         }
         guard !settings.skipWiFi else { return }
-        if !wifi.isOnCameraNetwork(ssid: settings.ssid, cameraIP: settings.cameraIP) {
+        let ssid = displayedSSID
+        let pw = displayedPassword
+        if !wifi.isOnCameraNetwork(ssid: ssid, cameraIP: settings.cameraIP) {
             log("Mac 已不在相机 Wi-Fi 上（相机热点可能断开）→ 重新加入")
-            if !settings.ssid.isEmpty { try? await wifi.join(ssid: settings.ssid, password: settings.password) }
-            guard await wifi.waitForCameraNetwork(ssid: settings.ssid, cameraIP: settings.cameraIP, timeout: 25) else {
+            if !ssid.isEmpty {
+                if !wifi.locationAuthorized { _ = await wifi.ensureLocationAuthorization(timeout: 8) }
+                do { try await wifi.join(ssid: ssid, password: pw) }
+                catch let error as WiFiJoinError {
+                    switch error {
+                    case .locationDenied, .noInterface: throw error
+                    case .networkNotFound, .associate:
+                        clearAutoCache()
+                        throw error
+                    }
+                }
+            }
+            guard await wifi.waitForCameraNetwork(ssid: ssid, cameraIP: settings.cameraIP, timeout: 25) else {
+                clearAutoCache()
                 throw WiFiJoinError.associate("未能重新加入相机 Wi-Fi")
             }
         }
@@ -639,6 +801,10 @@ final class AppModel {
         steps = Self.freshSteps()
         snapshot = LinkSnapshot()
         deviceProfile = .unidentified
+        wifiProvisionStatus = ""
+        activeSSID = ""
+        activePassword = ""
+        credentialSource = .none
         log("已断开")
         changed()
     }

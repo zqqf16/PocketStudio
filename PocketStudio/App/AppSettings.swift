@@ -40,6 +40,16 @@ final class AppSettings {
     }
     var skipBLE: Bool { get { d.bool(forKey: "skipBLE") } set { d.set(newValue, forKey: "skipBLE") } }
     var skipWiFi: Bool { get { d.bool(forKey: "skipWiFi") } set { d.set(newValue, forKey: "skipWiFi") } }
+    /// 配对成功后用 0x07/0x07、0x07/0x0E 读取相机热点。关掉后才使用下面手填的名称和密码。
+    var autoFetchWiFi: Bool {
+        get { d.object(forKey: "autoFetchWiFi") as? Bool ?? true }
+        set { d.set(newValue, forKey: "autoFetchWiFi"); notify() }
+    }
+    /// 最近一次配对到的外设 UUID，跳过蓝牙时用来找钥匙串里的凭据。
+    var lastBLEDeviceID: String {
+        get { d.string(forKey: "lastBLEDeviceID") ?? "" }
+        set { d.set(newValue, forKey: "lastBLEDeviceID") }
+    }
     var transport: TransportKind {
         get { TransportKind(rawValue: d.string(forKey: "transport") ?? "") ?? .network } set { d.set(newValue.rawValue, forKey: "transport") }
     }
@@ -110,4 +120,21 @@ nonisolated enum Keychain {
         var add = base; add[kSecValueData as String] = Data(value.utf8)
         SecItemAdd(add as CFDictionary, nil)
     }
+}
+
+/// 按蓝牙外设 UUID 保存相机热点。加入失败时清掉，下次重新读。
+nonisolated enum WiFiCredentialCache {
+    static func load(deviceID: String) -> (ssid: String, password: String)? {
+        guard !deviceID.isEmpty, let raw = Keychain.read(account: account(deviceID)) else { return nil }
+        return WiFiCredentialBlob.decode(raw)
+    }
+    static func save(deviceID: String, ssid: String, password: String) {
+        guard !deviceID.isEmpty else { return }
+        Keychain.write(WiFiCredentialBlob.encode(ssid: ssid, password: password), account: account(deviceID))
+    }
+    static func clear(deviceID: String) {
+        guard !deviceID.isEmpty else { return }
+        Keychain.write("", account: account(deviceID))
+    }
+    private static func account(_ deviceID: String) -> String { "wifi." + deviceID }
 }

@@ -63,8 +63,8 @@ xcodegen generate
 3. Grant the permissions onboarding asks for:
    - **Bluetooth** (required) wakes the camera hotspot.
    - **Local Network** (required) talks to the camera at `192.168.2.1:9004`.
-   - **Location** (optional). macOS requires it before an app may read the Wi-Fi name (SSID). With it, the app can join the hotspot itself. Without it, join the network manually.
-4. Enter the camera **Wi-Fi name and password**. The name usually looks like `OsmoPocket3-XXXX`. On the camera: **swipe down from the top → Settings (gear) → Wireless / Wi-Fi**. If you don't have them yet, connect anyway — Bluetooth will wake the hotspot and it will show up in the Mac Wi-Fi menu.
+   - **Location**. macOS requires it before an app may read the Wi-Fi name (SSID) and join the hotspot automatically. If you deny it, the connect page falls back to the copy-password steps.
+4. You can leave the camera **Wi-Fi name and password** empty. **Auto-fetch Wi-Fi** is on by default: after pairing, the app reads the hotspot name and password from the camera and stores them in the Keychain per device. Fill them in if the read fails (newer firmware may encrypt the reply) or if you turn auto-fetch off. The name usually looks like `OsmoPocket3-XXXX`. On the camera: **swipe down from the top → Settings (gear) → Wireless / Wi-Fi**.
 5. Click **Connect** in the toolbar. The app scans, pairs (the camera may ask you to confirm the first time), waits about 20 seconds for the hotspot, joins it, handshakes, starts video, and reports connected. Bluetooth stays up while Wi-Fi joins, then disconnects.
 
 ### When the system blocks it
