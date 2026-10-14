@@ -108,6 +108,7 @@ nonisolated final class CoreProtocolTests: XCTestCase {
         var sent: [DUMLPacket] = []
         let core = DJISessionCore(sessionID: 1) { _ in }
         core.onDUML = { p, d in if d == .tx { sent.append(p) } }
+        core.linkKeepalive = .legacy
         _ = core.makeHandshake(seed: 0)
         core.startVideo()
         XCTAssertEqual(sent.map(\.cmdID), [0x88, 0x81, 0x82, 0xDA])
@@ -126,6 +127,52 @@ nonisolated final class CoreProtocolTests: XCTestCase {
         XCTAssertEqual(sent.filter { $0.cmdID == 0x61 }.count, 2)
         // seq 每命令 +8
         XCTAssertEqual(sent[1].seq &- sent[0].seq, 8)
+        sent = []
+        for _ in 0 ..< 5 { core.tickLinkHeartbeat() }
+        XCTAssertEqual(sent.count, 0, "旧版保活不发 General:0x0E")
+    }
+
+    /// 默认：启动与 5s 视频 tick 都不发 0x4F；0x88/0x81 节奏不变；0x0E 为 1Hz 空负载 request → Camera。
+    func testMimoKeepaliveSkipsVersionConfig() {
+        var sent: [DUMLPacket] = []
+        let core = DJISessionCore(sessionID: 1) { _ in }
+        core.onDUML = { p, d in if d == .tx { sent.append(p) } }
+        XCTAssertEqual(core.linkKeepalive, .mimo)
+        _ = core.makeHandshake(seed: 0)
+        core.startVideo()
+        XCTAssertFalse(sent.contains { $0.cmdID == 0x4F }, "启动序列不含版本配置读取")
+        XCTAssertEqual(sent.map(\.cmdID), [0x88, 0x81, 0x82, 0xDA])
+        sent = []
+        for _ in 0 ..< 26 { core.tickVideoHeartbeat() }
+        XCTAssertEqual(sent.filter { $0.cmdID == 0x4F }.count, 0)
+        XCTAssertEqual(sent.filter { $0.cmdID == 0x88 }.count, 5)
+        XCTAssertEqual(sent.filter { $0.cmdID == 0x81 }.count, 1)
+        sent = []
+        for _ in 0 ..< 10 {
+            core.tickLinkHeartbeat()
+            core.tickCameraHeartbeat()
+        }
+        let hb = sent.filter { $0.cmdSet == 0 && $0.cmdID == 0x0E }
+        XCTAssertEqual(hb.count, 10)
+        XCTAssertTrue(hb.allSatisfy {
+            $0.receiverType == DUMLDevice.camera && $0.receiverID == 0
+                && $0.payload.isEmpty && $0.cmdType == DUMLCmdType.request
+        })
+        XCTAssertEqual(sent.filter { $0.cmdID == 0x8E }.count, 10, "相机参数轮询仍在")
+        XCTAssertEqual(sent.filter { $0.cmdID == 0x4F }.count, 0)
+        // 切回旧版后，同一节拍改为 0x4F，0x0E 停止
+        core.linkKeepalive = .legacy
+        sent = []
+        core.tickLinkHeartbeat()
+        core.tickVideoHeartbeat() // videoHBTick == 26，26 % 5 != 0，这一拍不发 0x4F
+        XCTAssertTrue(sent.isEmpty)
+        for _ in 0 ..< 4 { core.tickVideoHeartbeat() } // tick 27…30，30 % 5 == 0
+        let cfg = sent.filter { $0.cmdID == 0x4F }
+        XCTAssertEqual(cfg.count, 1)
+        XCTAssertEqual(cfg[0].receiverType, DUMLDevice.dm368)
+        XCTAssertEqual(cfg[0].receiverID, 2)
+        XCTAssertEqual(cfg[0].payload, [0x01, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF])
+        XCTAssertEqual(cfg[0].cmdType, DUMLCmdType.request)
     }
 
     func testGimbalSpeedMatchesPython() {

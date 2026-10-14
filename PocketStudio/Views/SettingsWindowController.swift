@@ -22,13 +22,14 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
     private lazy var invertYaw = UI.checkbox("反转水平（左/右）方向", on: s.invertYaw, target: self, action: #selector(save))
     private lazy var tcpPoke = UI.checkbox("握手前通过 TCP 7001 发送配对信息并保持连接（推荐，提升重连成功率）", on: s.tcpPoke, target: self, action: #selector(save))
     private lazy var autoExitPlayback = UI.checkbox("拍照后相机自动进入回放时，自动退出回放以恢复实时画面", on: s.autoExitPlayback, target: self, action: #selector(save))
+    private lazy var mimoKeepalive = UI.checkbox("Mimo 链路心跳（推荐；取消勾选恢复旧版 0x4F，便于实机对比）", on: s.mimoLinkKeepalive, target: self, action: #selector(save))
     private lazy var legacyFraming = UI.checkbox("使用原 Python 的 UDP 命令头 / ACK 布局（仅当新布局出问题时对比用）", on: s.legacyFraming, target: self, action: #selector(save))
     private lazy var swap = UI.checkbox("使用旧版姿态解析（原 Python 项目的字段布局，仅用于对比调试）", on: s.swapPitchYaw, target: self, action: #selector(save))
     private lazy var stream = UI.checkbox("（已停用）持续发送云台速度——会导致相机停止应答", on: s.continuousGimbalStream, target: self, action: #selector(save))
     private lazy var showPw = UI.checkbox("显示密码", on: false, target: self, action: #selector(togglePw))
 
     init() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 812), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 920), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         w.title = "设置"
         super.init(window: w)
         build()
@@ -77,6 +78,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
             [NSGridCell.emptyContentView, swap],
             [NSGridCell.emptyContentView, tcpPoke],
             [NSGridCell.emptyContentView, autoExitPlayback],
+            [NSGridCell.emptyContentView, mimoKeepalive],
             [NSGridCell.emptyContentView, legacyFraming],
             [NSGridCell.emptyContentView, UI.button("重新显示新手引导", symbol: "graduationcap", target: self, action: #selector(onboarding))],
         ])
@@ -85,7 +87,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         grid.columnSpacing = 12
         grid.column(at: 0).xPlacement = .trailing
         for r in [0, 6, 9, 12] { grid.row(at: r).topPadding = r == 0 ? 0 : 10; grid.cell(atColumnIndex: 0, rowIndex: r).xPlacement = .leading }
-        let note = UI.wrappingLabel("密码保存在系统钥匙串中。修改网络设置后需重新连接才会生效。", size: 11)
+        let note = UI.wrappingLabel("密码保存在系统钥匙串中。修改网络设置后需重新连接才会生效。链路心跳切换后立即生效：默认每秒发送 General:0x0E，并停止周期读取版本配置 0x4F；取消勾选则恢复旧版 0x4F。连接日志会写明当前模式。", size: 11)
         let stack = UI.vstack([grid, note], spacing: 16)
         let content = NSView()
         content.addSubview(stack)
@@ -135,6 +137,7 @@ final class SettingsWindowController: NSWindowController, NSTextFieldDelegate {
         s.legacyFraming = legacyFraming.state == .on
         s.tcpPoke = tcpPoke.state == .on
         s.autoExitPlayback = autoExitPlayback.state == .on
+        s.mimoLinkKeepalive = mimoKeepalive.state == .on
         AppModel.shared.applyLinkSettings()
     }
 

@@ -79,6 +79,13 @@ final class AppSettings {
     /// 拍照后相机自动进入回放时发「退出回放」。默认开。
     var autoExitPlayback: Bool { get { d.object(forKey: "autoExitPlayback") as? Bool ?? true } set { d.set(newValue, forKey: "autoExitPlayback") } }
     var legacyFraming: Bool { get { d.bool(forKey: "legacyFraming") } set { d.set(newValue, forKey: "legacyFraming") } }
+    /// 默认开：General:0x0E 1Hz，并停止周期 0x4F。关 = 旧版 0x4F 1Hz，便于实机 A/B。
+    /// 用 object(forKey:)：缺省键必须是 true，`bool(forKey:)` 会把缺省读成 false。
+    var mimoLinkKeepalive: Bool {
+        get { d.object(forKey: "mimoLinkKeepalive") as? Bool ?? true }
+        set { d.set(newValue, forKey: "mimoLinkKeepalive") }
+    }
+    var linkKeepalive: LinkKeepalive { mimoLinkKeepalive ? .mimo : .legacy }
     var swapPitchYaw: Bool { get { d.bool(forKey: "swapPY") } set { d.set(newValue, forKey: "swapPY") } }
     var continuousGimbalStream: Bool {
         get { d.object(forKey: "gimbalStream") as? Bool ?? true } set { d.set(newValue, forKey: "gimbalStream") }

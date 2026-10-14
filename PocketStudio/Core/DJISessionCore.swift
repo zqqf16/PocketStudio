@@ -4,9 +4,10 @@
 // 非线程安全：调用方必须在同一个串行队列上使用（macOS 端为 CameraLink.queue）。
 // 定时调用约定（与原项目一致）：
 //   tickAck()             每 20ms
-//   tickGimbal()          每 33ms
-//   tickCameraHeartbeat() 每 200ms
-//   tickVideoHeartbeat()  每 200ms（在 startVideo() 之后）
+//   tickGimbal()          每 40ms（25Hz 上限；静止不发）
+//   tickCameraHeartbeat() 每 1s（Camera:0x8E，附带 0xA0 / 0x61）
+//   tickLinkHeartbeat()   每 1s（与相机心跳同一拍；仅 mimo 模式发 General:0x0E）
+//   tickVideoHeartbeat()  每 200ms（startVideo() 之后：0x88 每 5 拍；0x4F 仅 legacy）
 
 import Foundation
 
@@ -43,6 +44,8 @@ nonisolated public final class DJISessionCore {
     public private(set) var baseSeq: UInt16 = 0
     /// 使用原 Python 命令头 / ACK 组 2 布局（设置项，仅用于对比）
     public var legacyFraming = false
+    /// 链路保活。默认 Mimo：General:0x0E，不周期发送 0x4F。设置可切回旧版 0x4F。
+    public var linkKeepalive: LinkKeepalive = .mimo
     public private(set) var stats = DJISessionStats()
 
     /// 发出数据报
@@ -303,7 +306,7 @@ nonisolated public final class DJISessionCore {
         if gimbalReady { sendGimbal(p) }
     }
 
-    /// 每 1s：Camera:0x8E 心跳；每 2 拍 0xA0；每 5 拍 0x61（原 200ms / 1s / 2s）
+    /// 每 1s：Camera:0x8E 参数选项；每 2 拍 0xA0；每 5 拍 0x61（原 200ms / 1s / 2s，§5d 降频）
     public func tickCameraHeartbeat() {
         send(CameraCommand.heartbeat)
         if cameraHBTick % 2 == 0 { send(CameraCommand.stateQuery) }
@@ -311,12 +314,21 @@ nonisolated public final class DJISessionCore {
         cameraHBTick += 1
     }
 
+    /// 每 1s，与 `tickCameraHeartbeat` 同一节拍。仅 `.mimo` 发送 General:0x0E。
+    public func tickLinkHeartbeat() {
+        guard linkKeepalive == .mimo else { return }
+        send(LinkCommand.heartbeat)
+    }
+
     // MARK: Video start (Mimo 启动序列)
 
     public static let dm368Reg88First: Bytes = [0x17, 0x00, 0x46, 0x23, 0x73, 0x41, 0x50, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02]
     public static let dm368Reg88Repeat: Bytes = [0x17, 0x00, 0x68, 0x23, 0x69, 0x41, 0x50, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02]
 
-    /// 1) PUSH General:0x88 → DM368(1)  2) WRITE 0x81 / 0x82 → DM368(2)  3) 开始视频心跳
+    /// 1) PUSH General:0x88 → DM368(1)  2) WRITE 0x81 / 0x82 → DM368(2)  3) 开始注册循环（0x88 1Hz）
+    /// 启动序列不含 0x4F。原 Python 的前三步同样只有 0x88/0x81/0x82，0x4F 只出现在随后的循环里，
+    /// 而且它是版本配置分块读取（Get Cfg File），不是视频门控。OPC 把画面寿命归因于 0x88/0x81。
+    /// 周期 0x4F 仅在 `linkKeepalive == .legacy` 时由 tick 发送。
     public func startVideo() {
         sendPush(receiverType: DUMLDevice.dm368, receiverID: 1, cmdSet: DUMLCmdSet.general, cmdID: 0x88,
                  payload: Self.dm368Reg88First)
@@ -339,11 +351,14 @@ nonisolated public final class DJISessionCore {
         sendDM368Register()
     }
 
-    /// 请求关键帧：0x09/0xA8 → DM368(type 8, id 0)（OPC「start live view / IDR」）。
-    /// ⚠️ 不要周期性发送：每秒重发会不断重置编码器 GOP，IDR 永远到不了（OPC 黑屏 bug）。调用方须限频。
+    /// 请求关键帧。两条一起发，调用方须限频（CameraLink ≥3s）。
+    /// 1) 0x09/0xA8 → DM368(type 8, id 0)：OPC 在 Pocket 家族上用作 live view / IDR。
+    ///    ⚠️ 不要周期性发送：每秒重发会不断重置编码器 GOP，IDR 永远到不了（OPC 黑屏 bug）。
+    /// 2) Camera:0xB3 空负载：Mimo `AppRequestIFrame`。负载未知，见 `CameraCommand.requestIFrame`。
     public func requestKeyframe() {
         sendPush(receiverType: DUMLDevice.dm368, receiverID: 0, cmdSet: 0x09, cmdID: 0xA8,
                  payload: [0x00, 0x04, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        send(CameraCommand.requestIFrame)
     }
 
     public func stopVideoHeartbeat() { videoHeartbeatRunning = false }
@@ -357,11 +372,12 @@ nonisolated public final class DJISessionCore {
                  payload: [0x00], cmdType: DUMLCmdType.write)
     }
 
-    /// 每 200ms：General:0x4F → DM368(2)，负载 01 00 XX 00 00 ff ff ff ff，每个计数值发两次
+    /// 每 200ms。0x81/0x82 每 5s；0x88 保持 1Hz（相机约 10s 无注册就停视频）。
+    /// 0x4F 只在旧版保活里以 1Hz 发送：9 字节 = type(1) + offset u32le + length u32le(0xFFFFFFFF)，
+    /// 计数器沿用 Python 写在 offset 的第 2 字节。这是 Get Cfg File，相机会回约 265 字节 XML。
     public func tickVideoHeartbeat() {
         guard videoHeartbeatRunning else { return }
-        // 0x4F 降为 1Hz（原 5Hz，每个计数发两次）；0x81/0x82 每 5s；0x88 保持 1Hz（相机约 10s 无注册就停视频）
-        if videoHBTick % 5 == 0 {
+        if linkKeepalive == .legacy, videoHBTick % 5 == 0 {
             let counter = UInt8(videoHBCounter & 0xFF)
             let hb: Bytes = [0x01, 0x00, counter, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF]
             sendPush(receiverType: DUMLDevice.dm368, receiverID: 2, cmdSet: DUMLCmdSet.general, cmdID: 0x4F, payload: hb)
