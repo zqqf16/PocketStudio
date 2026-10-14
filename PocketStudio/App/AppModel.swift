@@ -38,7 +38,7 @@ nonisolated struct DUMLLogEntry: Sendable {
     var isHighFrequency: Bool {
         let p = packet
         switch (p.cmdSet, p.cmdID) {
-        case (0, 0x4F), (2, 0x8E), (2, 0x80), (2, 0xDC), (2, 0xA0), (2, 0x61), (4, 0x01), (4, 0x05), (13, 0x02), (0, 0x81), (0, 0x82), (0, 0x88): return true
+        case (0, 0x4F), (0, 0x0E), (2, 0x8E), (2, 0x80), (2, 0xDC), (2, 0xA0), (2, 0x61), (4, 0x01), (4, 0x05), (13, 0x02), (0, 0x81), (0, 0x82), (0, 0x88): return true
         default: return false
         }
     }
@@ -398,6 +398,9 @@ final class AppModel {
         switch result {
         case .success:
             LocalNetworkPermission.shared.markGrantedFromTraffic()
+            linkHeartbeatReplyCount = 0
+            versionConfigReplyCount = 0
+            logKeepaliveIfNeeded(force: true)
             linkConnectedAt = ProcessInfo.processInfo.systemUptime
             lastReplyCount = 0; lastReplyCountAt = linkConnectedAt; replyRate = 0
             lastRxPackets = 0; lastVideoPackets = 0
@@ -428,7 +431,7 @@ final class AppModel {
 
     private func requestKeyframe(_ reason: String) {
         link?.requestKeyframe { [weak self] sent in
-            if sent { Task { @MainActor in self?.log("请求关键帧（0x09/0xA8）：\(reason)") } }
+            if sent { Task { @MainActor in self?.log("请求关键帧（0x09/0xA8 + Camera:0xB3）：\(reason)") } }
         }
     }
 
@@ -497,7 +500,7 @@ final class AppModel {
         let rx = s.stats.rxPackets - lastRxPackets, vp = s.stats.videoFrames - lastVideoPackets
         lastRxPackets = s.stats.rxPackets; lastVideoPackets = s.stats.videoFrames
         let types = s.stats.rxTypeCounts.sorted { $0.key < $1.key }.map { "t\($0.key)=\($0.value)" }.joined(separator: ",")
-        return String(format: "[%@] 视频片段 %ld/s · AU %ld/s · 解码 %ld fps · %ld kbps · 最近：视频包 %@ / 解码 %@ / 遥测 %@ / 应答 %@ · 相机应答 %.1f/s · ACK v=%04X%@ r=%04X%@ x=%04X%@ · 握手 %ld 次 · 解码错误 %ld%@ · 解码器重建 %ld · 渲染器 %@ 冲刷 %ld · 等关键帧 %@(丢 %ld) · 关键帧请求 %ld · GOP %ld · 录制排队 %ld · 待解码 %ld · 主线程最大延迟 %.0fms · 收包 %ld（视频 %ld）累计[%@] · 云台 %@",
+        return String(format: "[%@] 视频片段 %ld/s · AU %ld/s · 解码 %ld fps · %ld kbps · 最近：视频包 %@ / 解码 %@ / 遥测 %@ / 应答 %@ · 相机应答 %.1f/s · ACK v=%04X%@ r=%04X%@ x=%04X%@ · 握手 %ld 次 · 解码错误 %ld%@ · 解码器重建 %ld · 渲染器 %@ 冲刷 %ld · 等关键帧 %@(丢 %ld) · 关键帧请求 %ld · GOP %ld · 录制排队 %ld · 待解码 %ld · 主线程最大延迟 %.0fms · 收包 %ld（视频 %ld）累计[%@] · 云台 %@ · 保活 %@",
                       tag, h.rxChunksPerSec, h.ausPerSec, v.fps, v.kbps,
                       age(s.lastVideoAt), age(h.lastDecodedAt), age(s.lastTelemetryAt), age(s.lastReliableAt),
                       replyRate,
@@ -505,7 +508,7 @@ final class AppModel {
                       s.handshakeCount, h.decodeErrors, h.lastDecodeError.map { "(\($0))" } ?? "", h.decoderResets,
                       rendererStatus(), h.rendererFlushes, h.waitingKeyframe ? "是" : "否", h.droppedWhileWaiting,
                       h.keyframeRequests, h.gopFrames, h.recPending, h.pendingIngest, mainLagMax, rx, vp, types,
-                      s.gimbalReady ? "就绪" : "准备中")
+                      s.gimbalReady ? "就绪" : "准备中", settings.linkKeepalive.diagnosticToken)
             + " · 型号 \(deviceProfile.displayName) · 编码 \(video.mediaNotes().codec) · 帧头 \(video.mediaNotes().frameHeader) · UDP \(deviceProfile.udpPort)"
     }
 
@@ -619,6 +622,7 @@ final class AppModel {
     private func teardown() {
         recoveryTask?.cancel(); recoveryTask = nil; recovering = false
         monitor.reset(); videoRecoveryMessage = nil
+        loggedKeepalive = nil
         link?.stop(); link = nil
         poke.close()
         if isLocalRecording { toggleLocalRecording() }
@@ -682,7 +686,35 @@ final class AppModel {
     private var modeSendTask: Task<Void, Never>?
 
     /// 相机 / 云台对 request 的应答（flags 0x80/0xC0）
+    /// 前几条 0x0E / 0x4F 应答写入文本日志，避免 1Hz 刷屏，又让实机 A/B 看得到负载。
+    private var linkHeartbeatReplyCount = 0
+    private var versionConfigReplyCount = 0
+    private var loggedKeepalive: LinkKeepalive?
+    private func logKeepaliveIfNeeded(force: Bool = false) {
+        let mode = settings.linkKeepalive
+        guard force || loggedKeepalive != mode else { return }
+        loggedKeepalive = mode
+        log(mode.sessionLog)
+    }
+
     private func handleReply(_ p: DUMLPacket) {
+        switch (p.cmdSet, p.cmdID) {
+        case (0, 0x0E):
+            linkHeartbeatReplyCount += 1
+            guard linkHeartbeatReplyCount <= 3 else { return }
+            log("相机应答 · 链路心跳 General:0x0E #\(linkHeartbeatReplyCount)：\(CameraCommand.describeReply(cmdID: p.cmdID, payload: p.payload)) payload=\(Self.payloadHex(p.payload))")
+            return
+        case (0, 0x4F):
+            versionConfigReplyCount += 1
+            guard versionConfigReplyCount <= 2 else { return }
+            log("相机应答 · 版本配置 General:0x4F #\(versionConfigReplyCount)：\(p.payload.count) 字节（通常约 265 字节 XML，会占用可靠窗口）")
+            return
+        case (2, 0xB3):
+            log("相机应答 · 关键帧 Camera:0xB3：\(CameraCommand.describeReply(cmdID: p.cmdID, payload: p.payload)) payload=\(Self.payloadHex(p.payload))")
+            return
+        default:
+            break
+        }
         let name: String
         switch (p.cmdSet, p.cmdID) {
         case (2, 0x01): name = "快门"
@@ -695,6 +727,11 @@ final class AppModel {
         let ok = p.payload.first == 0
         if p.cmdSet == 2, p.cmdID == 0xE1 { captureMode.ack(success: ok); changed() }
         log("相机应答 · \(name)：\(CameraCommand.describeReply(cmdID: p.cmdID, payload: p.payload))\(ok ? "" : "（\(p.payload.prefix(4).map { String(format: "%02x", $0) }.joined(separator: " "))）")")
+    }
+
+    private static func payloadHex(_ p: Bytes) -> String {
+        let hex = Bytes(p.prefix(16)).hexString()
+        return hex.isEmpty ? "空" : hex
     }
     func cycleMode() {
         let segs = Shutter.segments(for: deviceProfile)
@@ -738,11 +775,13 @@ final class AppModel {
     func applyLinkSettings() {
         guard let link else { return }
         Self.configure(link, settings)
+        logKeepaliveIfNeeded()
     }
     private static func configure(_ link: CameraLink, _ s: AppSettings) {
         link.legacyAttitudeLayout = s.swapPitchYaw
         link.setGimbalStreaming(false)   // 不再提供 30Hz 持续发送（会挤爆相机命令通道，见 AGENTS §5f）
         link.setLegacyFraming(s.legacyFraming)
+        link.setLinkKeepalive(s.linkKeepalive)
         link.configureGimbal(order: s.gimbalAxisOrder, invertYaw: s.invertYaw, invertPitch: s.invertPitch)
     }
 

@@ -345,8 +345,47 @@ nonisolated public enum CameraCommand {
         }
     }
 
-    // 心跳（flags 0x40，与原项目一致）
+    /// Camera:0x8E。Mimo 符号名是参数选项（`dji_camera_parameter_option`），不是链路心跳。保持 ≤1Hz。
     public static let heartbeat = Spec(cmdID: 0x8E, payload: [0x00, 0x01, 0x14, 0x00], cmdType: DUMLCmdType.request)
     public static let stateQuery = Spec(cmdID: 0xA0, cmdType: DUMLCmdType.request)
     public static let statusPoll = Spec(cmdID: 0x61, cmdType: DUMLCmdType.request)
+
+    /// Mimo `AppRequestIFrame` / `dji_camera_get_app_request_i_frame_req`（Camera:0xB3，flags 0x40）。
+    /// dji-firmware-tools 只登记了名字「Request IFrame」，没有字段。模板名是 GET，故负载先用空。
+    /// OpenPocketCine 把 0x09/0xA8 当作 Pocket 家族的 PLI，没有记录 0xB3。未实机验证；与 0xA8 一起发，且调用方限频。
+    public static let requestIFrame = Spec(cmdID: 0xB3, payload: [])
+}
+
+/// 连接期间的保活策略。默认 `.mimo`。两种模式都保留已在实机上与画面共存、且 OPC 认为维持视频所必需的注册：
+/// General:0x88 1Hz、0x81/0x82 每 5s，以及 Camera:0x8E ≤1Hz（参数轮询）。
+nonisolated public enum LinkKeepalive: String, Sendable, Equatable {
+    /// General:0x0E 1Hz。不发送 General:0x4F。
+    case mimo
+    /// 旧行为：General:0x4F → DM368(2) 1Hz（版本配置分块读取）。不发送 0x0E。
+    case legacy
+
+    /// 诊断行里的短标记
+    public var diagnosticToken: String { self == .mimo ? "0x0E" : "旧0x4F" }
+
+    /// 连接成功或切换设置时写入文本日志
+    public var sessionLog: String {
+        switch self {
+        case .mimo:
+            return "链路保活：Mimo。每秒 1 次 General:0x0E（空负载、flags 0x40、发往 Camera）。视频注册 General:0x88 保持 1Hz，相机参数 Camera:0x8E 保持 1Hz。0x4F 版本配置读取已关闭。0x0E 的接收方和空负载尚未实机验证。"
+        case .legacy:
+            return "链路保活：旧版。每秒 1 次 General:0x4F → DM368(2)（版本配置分块读取，相机通常回约 265 字节 XML）。General:0x0E 关闭。0x88 与 0x8E 与 Mimo 模式相同。用于实机对比。"
+        }
+    }
+}
+
+/// 链路层 General 命令（cmdSet 0），与相机参数轮询分开。
+nonisolated public enum LinkCommand {
+    /// General:0x0E `dji_general_heartbeat`。
+    /// 负载为空：dji-firmware-tools 写明 PC 发起的心跳请求通常没有 Group/文本（应答才可能带 1 字节 group）。
+    /// 接收方假设为 Camera(1,0)。Mimo `HeartbeatLogic` 的对端没有从符号里解出；lib-osmo-ble 不涉及这条 Wi-Fi 命令。未实机验证。
+    /// flags 0x40：期待一个短应答，便于确认相机是否认识它。不要高于 1Hz。
+    public static let heartbeat = CameraCommand.Spec(
+        receiverType: DUMLDevice.camera, receiverID: 0,
+        cmdSet: DUMLCmdSet.general, cmdID: 0x0E,
+        payload: [], cmdType: DUMLCmdType.request)
 }

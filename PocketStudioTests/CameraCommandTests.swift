@@ -214,7 +214,12 @@ nonisolated final class LinkRecoveryTests: XCTestCase {
         core.onDUML = { p, d in if d == .tx { sent.append(p) } }
         core.requestKeyframe(); core.reRegister()
         XCTAssertEqual(sent[0].cmdSet, 0x09); XCTAssertEqual(sent[0].cmdID, 0xA8); XCTAssertEqual(sent[0].receiverType, 8)
-        XCTAssertEqual(sent.dropFirst().map(\.cmdID), [0x88, 0x81, 0x82])
+        XCTAssertEqual(sent[0].cmdType, DUMLCmdType.request)
+        XCTAssertEqual(sent[1].cmdSet, 2); XCTAssertEqual(sent[1].cmdID, 0xB3)
+        XCTAssertEqual(sent[1].receiverType, DUMLDevice.camera); XCTAssertEqual(sent[1].receiverID, 0)
+        XCTAssertEqual(sent[1].payload, [])
+        XCTAssertEqual(sent[1].cmdType, DUMLCmdType.request)
+        XCTAssertEqual(sent.dropFirst(2).map(\.cmdID), [0x88, 0x81, 0x82])
     }
 
     private func ev(_ m: inout VideoHealthMonitor, _ now: Double, v: Double?, d: Double?, t: Double?, r: Double? = nil, busy: Bool = false) -> VideoRecoveryAction {

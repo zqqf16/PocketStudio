@@ -100,7 +100,8 @@ nonisolated final class CameraLinkLoopbackTests: XCTestCase {
         XCTAssertGreaterThan(acks.count, 20, "ACK 应约 50Hz")
         XCTAssertTrue(acks.allSatisfy { $0.sessionID == 0xABCD }, "握手后应采用相机 session")
         let duml = pk.filter { $0.type == DJIUDPType.command }.flatMap { DUML.parse($0.body) }
-        XCTAssertTrue(duml.contains { $0.cmdSet == 0 && $0.cmdID == 0x4F }, "视频心跳")
+        XCTAssertTrue(duml.contains { $0.cmdSet == 0 && $0.cmdID == 0x0E && $0.payload.isEmpty && $0.cmdType == DUMLCmdType.request }, "链路心跳 0x0E")
+        XCTAssertFalse(duml.contains { $0.cmdSet == 0 && $0.cmdID == 0x4F }, "默认不发版本配置 0x4F")
         XCTAssertTrue(duml.contains { $0.cmdSet == 0 && $0.cmdID == 0x81 && $0.cmdType == 4 }, "DM368 注册")
         XCTAssertTrue(duml.contains { $0.cmdSet == 2 && $0.cmdID == 0x8E }, "相机心跳")
         XCTAssertTrue(duml.contains { $0.cmdSet == 2 && $0.cmdID == 0x01 && $0.payload == [1] && $0.cmdType == DUMLCmdType.request }, "拍照 = 0x02/0x01 [01] flags 0x40")
