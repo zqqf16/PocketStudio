@@ -178,7 +178,7 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
 
 - **识别**：厂商数据首字节 `0x20` / `0x21` / `0x22`（公司 ID 小端 `AA 08` = 0x08AA，Xtra `AA F7`）。没有厂商数据时看广播名或设置里的 Wi-Fi 名。扫描记原始厂商字节。`0x21`/`0x22` 与 Xtra 端口 10004 都还没有用本应用实机确认。
 - **配对**：`mbln` 失败（超时或出错）再发 `osmo`。`osmo` 的 `00 01`、`00 02` 算成功；`00 06` 不是「请在屏幕上点允许」。TCP 7001 用同一次成功的 PIN。
-- **视频**：Annex-B 解析器在见到 HEVC `0x40/0x42/0x44`（VPS/SPS/PPS）或 H.264 `0x67/0x68` 之前不锁定编码。`0x28` 单独出现不得当成 H.264 PPS。HEVC 关键帧是 NAL type 16–21（BLA 首字节 `0x20` 很常见）。`CMVideoFormatDescriptionCreateFromHEVCParameterSets` 得到 hvc1，MP4 用 `AVAssetWriter` 直通、不重编码；原始文件在检测到 HEVC 时用 `.h265`。另外检查码流里有没有 16 字节帧头 `00 00 01 ff` + u32le 长度 + 8 字节元数据（OPC 对 4/4P 与 Nano 的描述）；没有就原样当 Annex-B，Pocket 3 行为不变。公开资料：4/4P 预览是 HEVC 1280×720、约 25 fps。
+- **视频**：Annex-B 解析器在见到 HEVC `0x40/0x42/0x44`（VPS/SPS/PPS）或 H.264 `0x67/0x68` 之前不锁定编码。`0x28` 单独出现不得当成 H.264 PPS。HEVC 关键帧是 NAL type 16–21（BLA 首字节 `0x20` 很常见）。`CMVideoFormatDescriptionCreateFromHEVCParameterSets` 得到 hvc1，MP4 用 `AVAssetWriter` 直通、不重编码；原始文件在检测到 HEVC 时用 `.h265`。Pocket 3 **不**做 16 字节帧头剥离（UDP 层去掉 12 字节分片头后就是 Annex-B）。Pocket 4 / 4P 才检查 `00 00 01 ff` + u32le 长度 + 8 字节元数据，而且必须看到下一帧头落在声明长度上才剥；单独的起始码不算。公开资料：4/4P 预览是 HEVC 1280×720、约 25 fps。
 - **状态**：4/4P 有机内存储，不再把 0x80 @5/@9 和 0xDC @6/@10 显示成 SD 容量。调试日志每 5 秒（以及 @57 变化时）打一行 `[调试] Camera:0x80` 原始十六进制。
 - **云台**：载荷与 Pocket 3 相同。轴顺序 / 正负方向在 4/4P 上未验证。没有长焦切换。
 
@@ -220,7 +220,7 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
 ## 7. 构建与测试
 
 - **macOS**：Xcode 26 / macOS 26 SDK。`brew install xcodegen && xcodegen generate`，打开 `PocketStudio.xcodeproj`，选择签名团队后运行。部署目标 macOS 26.0。未开启 App Sandbox（CoreWLAN 加入网络在沙盒中受限）。
-- **测试**：Xcode 中 ⌘U；或 `Tools/run-linux-tests.sh`（Swift 6.2+，`-warnings-as-errors`，默认 MainActor 隔离）；`ISOLATION=nonisolated Tools/run-linux-tests.sh` 测另一种默认值。当前 65 个协议层测试（含机型档、HEVC、链路保活调度、Camera:0xB3，以及 Wi-Fi 回复解析 / 读取状态机 / 打码）。两种默认隔离都通过。
+- **测试**：Xcode 中 ⌘U；或 `Tools/run-linux-tests.sh`（Swift 6.2+，`-warnings-as-errors`，默认 MainActor 隔离）；`ISOLATION=nonisolated Tools/run-linux-tests.sh` 测另一种默认值。当前 67 个协议层测试（含机型档、HEVC、Pocket 3 帧头回归、链路保活调度、Camera:0xB3，以及 Wi-Fi 回复解析 / 读取状态机 / 打码）。两种默认隔离都通过。
 - 新增 Swift 文件后需重新 `xcodegen generate`（Linux 上可自行编译 XcodeGen）。
 
 ## 8. 已踩过的坑（及修复）
@@ -240,10 +240,11 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
 13. **「录制到 Mac」不生成文件**：Pocket 3 实时流只在流开始/重新握手时发 IDR，录制器一直等关键帧（日志 3 次「录制未生成文件」）。修复：`VideoPipeline` 缓存最近一个 GOP，开始录制时先写入；缓存不可用时自动重新握手请求 IDR；`StreamRecorder` 排队写入不丢帧。文件名改用 en_US_POSIX（之前带「上午」）。
 14. **「查看」按钮没反应**：工具栏项不在默认工具栏且无 target；现在默认显示「查看文件」并显式 target，优先选中最近的录制，不存在则打开文件夹。
 15. **把 General:0x4F 当成视频心跳**：原 Python `start_video()` 注释写「Mimo VPN 抓包里的 5Hz 视频心跳」，但同一函数的启动三步只有 0x88 + 0x81 + 0x82，0x4F 只在随后的循环里。dji-firmware-tools 把它命名为 Get Cfg File；DUMLrub `cmd_common_get_cfg_file` 的负载就是 `type u8 + offset u32le + length u32le`。本应用的 `01 00 XX 00 00 ff ff ff ff` 即 type=1、length=0xFFFFFFFF，计数器写在 offset 的第 2 字节。实机每次应答约 265 字节 XML，把可靠窗口占满后相机停止应答命令（§5b、§5d）。OPC 把画面寿命归因于 0x88/0x81 注册。默认停止 0x4F（启动时也不发一次），改发 General:0x0E 1Hz。设置可切回旧版做 A/B。停发之后画面能否单靠 0x88 维持，尚未实机确认。
+16. **Pocket 3 实机画面全是 -12909**：`DJILiveViewDeframer` 把 Annex-B 里的 `00 00 01 ff`（起始码，或 `00 00 00 01` 错一位）加上任意像样的小端长度当成 16 字节帧头，从中间删掉一段 NAL。诊断行会写「帧头 00 00 01 ff」，同时 AU 仍有 ~30/s、解码停在几十秒前。修复：Pocket 3 / 未识别机型不启用剥离；启用时也要等下一帧头证明长度。GOP 缓存在连续解码错误或超过 900 帧 / 48MB 时清空。
 
 ## 9. 已验证 / 未验证
 
-- **已验证（Linux，Swift 6.2.3 编译 + 单测）**：CRC、DUML、UDP 头/握手/ACK/命令包与 Python 逐字节一致；状态解析；BLE 帧与识别；H.264 Annex-B 拆分与访问单元组装；HEVC 参数集识别、IRAP 16–21 关键帧、`00 00 01 ff` 帧头剥离与 Pocket 3 Annex-B 原样通过；机型识别（0x20/0x21/0x22、广播名、Xtra 端口 10004）；模式表（Pocket 3 拍照 05，4P 拍照 0x17 / 实况 0x4D，Pocket 4 复用 Pocket 3）；4/4P 不把 0x80/0xDC 当成 SD 容量；默认保活发 General:0x0E、不发 0x4F，旧版可切回；关键帧同时发 0x09/0xA8 与 Camera:0xB3；`CameraLink` 与本地假相机的完整回环（握手、ACK、心跳、视频、注册、拍照、云台）；云台轴映射 / 停止 / 看门狗。Wi-Fi：`[status][len][utf8]` 解析、0xE4、非法 UTF-8 视为不可读、读取状态机（3 次 / 20 秒、广播名回退、加密即停、写间隔 200ms）、手动/缓存选择、扫描重试 90 秒、密码打码。这些是纯逻辑测试，没有相机。
+- **已验证（Linux，Swift 6.2.3 编译 + 单测）**：CRC、DUML、UDP 头/握手/ACK/命令包与 Python 逐字节一致；状态解析；BLE 帧与识别；H.264 Annex-B 拆分与访问单元组装；HEVC 参数集识别、IRAP 16–21 关键帧；`00 00 01 ff` 只有在下一帧头对齐时才剥离，Pocket 3 形态的 Annex-B（含起始码和片内 `00 00 01 ff`）原样通过；机型识别（0x20/0x21/0x22、广播名、Xtra 端口 10004）；模式表（Pocket 3 拍照 05，4P 拍照 0x17 / 实况 0x4D，Pocket 4 复用 Pocket 3）；4/4P 不把 0x80/0xDC 当成 SD 容量；默认保活发 General:0x0E、不发 0x4F，旧版可切回；关键帧同时发 0x09/0xA8 与 Camera:0xB3；`CameraLink` 与本地假相机的完整回环（握手、ACK、心跳、视频、注册、拍照、云台）；云台轴映射 / 停止 / 看门狗。Wi-Fi：`[status][len][utf8]` 解析、0xE4、非法 UTF-8 视为不可读、读取状态机（3 次 / 20 秒、广播名回退、加密即停、写间隔 200ms）、手动/缓存选择、扫描重试 90 秒、密码打码。这些是纯逻辑测试，没有相机。
 - **实机已确认（用户反馈）**：应用可在真实 Pocket 3 上构建运行；云台轴顺序 `[pitch, roll, yaw]`。Pocket 4 / 4P **没有**用本应用实机确认。
 - **依据第三方实机抓包（OpenPocketCine）但本应用尚未实机复测**：相机快门/录像/模式命令、云台回中/模式/翻转/转速、0x03/0xDA 初始化、0x80/0x05 新解析、GOP 缓存录制；Pocket 4/4P 的型号字节 0x21/0x22、PIN `osmo`、HEVC 预览、16 字节帧头、4P 拍照 0x17 / 实况 0x4D / 慢动作 0x00、Xtra UDP 10004。SuperPhoto（`0x02/0x12`，快门 `0F`）只记在常量里，**不发送**。
 - **未在 Linux 编译、仅人工审阅**：所有 `Platform/`、`App/`、`Views/` 文件（用户已在 Xcode 26 编译通过的版本之后的改动：云台 UI 停止钩子、`LocalNetworkPermission`）。

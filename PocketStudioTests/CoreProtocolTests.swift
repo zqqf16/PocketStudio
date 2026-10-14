@@ -249,6 +249,10 @@ nonisolated final class CoreProtocolTests: XCTestCase {
         XCTAssertEqual(Shutter.segments(for: .pocket4P), [.slowMotion, .video, .photo, .livePhoto, .timelapse])
         XCTAssertEqual(DeviceProfile.pocket4.documentedPreviewCodec, .hevc)
         XCTAssertEqual(DeviceProfile.pocket3.documentedPreviewCodec, .h264)
+        XCTAssertFalse(DeviceProfile.pocket3.usesLiveViewFrameHeader)
+        XCTAssertFalse(DeviceProfile.unidentified.usesLiveViewFrameHeader)
+        XCTAssertTrue(DeviceProfile.pocket4.usesLiveViewFrameHeader)
+        XCTAssertTrue(DeviceProfile.pocket4P.usesLiveViewFrameHeader)
     }
 
     func testCodecHintDoesNotLatchOnAmbiguousHeaders() {
@@ -293,42 +297,116 @@ nonisolated final class CoreProtocolTests: XCTestCase {
         XCTAssertEqual(aus[0].nals, [bla])
     }
 
-    func testLiveViewFrameHeaderStrippedOnlyWhenPresent() {
+    func testLiveViewFrameHeaderStrippedOnlyWhenProven() {
         let payload: Bytes = [0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0x0C, 0x01]
         var header = Bytes([0x00, 0x00, 0x01, 0xFF])
         header.appendLE32(UInt32(payload.count))
         header += Bytes(repeating: 0xAB, count: 8)
         XCTAssertEqual(header.count, 16)
-        var framed = DJILiveViewDeframer()
-        let whole = framed.push(header + payload)
-        XCTAssertTrue(whole.resetParser)
-        XCTAssertTrue(framed.usesFrameHeader)
-        XCTAssertEqual(whole.bytes, payload)
-        XCTAssertEqual(framed.frames, 1)
 
-        var split = DJILiveViewDeframer()
+        // 下一帧头还没到时不能剥：半个包刚好等于声明长度会把后面的 NAL 切掉。
+        var one = DJILiveViewDeframer(armed: true)
+        let held = one.push(header + payload)
+        XCTAssertFalse(one.usesFrameHeader)
+        XCTAssertTrue(held.bytes.isEmpty)
+        XCTAssertEqual(one.flush(), payload)
+        XCTAssertTrue(one.usesFrameHeader)
+        XCTAssertEqual(one.frames, 1)
+
+        var split = DJILiveViewDeframer(armed: true)
         let all = header + payload + header + payload
         let first = split.push(Array(all.prefix(3)))
         XCTAssertFalse(split.usesFrameHeader)
         XCTAssertTrue(first.bytes.isEmpty)
         let rest = split.push(Array(all.dropFirst(3)))
         XCTAssertTrue(split.usesFrameHeader)
-        XCTAssertEqual(rest.bytes, payload + payload)
+        XCTAssertTrue(rest.resetParser)
+        XCTAssertEqual(rest.bytes, payload)
+        XCTAssertEqual(split.flush(), payload)
         XCTAssertEqual(split.frames, 2)
 
         let annex: Bytes = [0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1F, 0, 0, 0, 1, 0x68, 0xCE, 0x38, 0x80]
-        var raw = DJILiveViewDeframer()
+        var raw = DJILiveViewDeframer(armed: true)
         var got = Bytes()
         for byte in annex { got += raw.push([byte]).bytes }
         got += raw.flush()
         XCTAssertEqual(got, annex)
         XCTAssertFalse(raw.usesFrameHeader)
 
-        var bogus = DJILiveViewDeframer()
+        var bogus = DJILiveViewDeframer(armed: true)
         let huge = Bytes([0x00, 0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F]) + annex
-        let passed = bogus.push(huge)
+        var passed = bogus.push(huge).bytes
+        passed += bogus.flush()
         XCTAssertFalse(bogus.usesFrameHeader)
-        XCTAssertEqual(passed.bytes + bogus.flush(), huge)
+        XCTAssertEqual(passed, huge)
+    }
+
+    /// Pocket 3 实机：诊断行出现「帧头 00 00 01 ff」，随后每个 AU 都是 -12909。
+    /// 旧检测只要看到 `00 00 01 ff` 加一个像样的小端长度就剥离，会把 Annex-B 从中间切开。
+    func testPocket3AnnexBIsNotStrippedAsFrameHeader() {
+        let sc: Bytes = [0, 0, 0, 1]
+        let sps: Bytes = [0x67, 0x42, 0x00, 0x1F, 0xE9, 0x01, 0x40]
+        let pps: Bytes = [0x68, 0xCE, 0x3C, 0x80]
+        let idr: Bytes = [0x65, 0x88, 0x84, 0x00, 0x21, 0x00, 0x00, 0x03, 0x01]
+        // 片内出现旧检测一定会命中的 8 字节：起始码形态的 00 00 01 ff + 长度 32。
+        var trap = Bytes([0x00, 0x00, 0x01, 0xFF])
+        trap.appendLE32(32)
+        trap += Bytes(repeating: 0x5A, count: 32)
+        // 4 字节起始码错一位也是 00 00 01 ff，后面的小端数碰巧落在 1...1500000。
+        let shifted: Bytes = [0x00, 0x00, 0x00, 0x01, 0xFF, 0x40, 0x00, 0x00, 0x00, 0x11, 0x22, 0x33]
+        var pslice: Bytes = [0x41, 0x9A, 0x00, 0x00, 0x05]
+        pslice += trap
+        pslice += shifted
+        pslice += [0x80, 0x01, 0x02, 0x03]
+        // 长度声称只有 8 字节，但后面紧跟的是完整 SPS，不是下一帧头。旧代码会剥掉 16 字节。
+        var shortHeader = Bytes([0x00, 0x00, 0x01, 0xFF])
+        shortHeader.appendLE32(8)
+        shortHeader += Bytes(repeating: 0xAB, count: 8)
+        let stream = shortHeader + sc + sps + sc + pps + sc + idr + sc + pslice
+
+        var off = DJILiveViewDeframer(armed: false)
+        var armed = DJILiveViewDeframer(armed: true)
+        for chunk in [1, 7, 12, 50, 200, 1024] {
+            var a = Bytes()
+            var b = Bytes()
+            var i = 0
+            while i < stream.count {
+                let n = min(chunk, stream.count - i)
+                let piece = Array(stream[i ..< i + n])
+                let ao = off.push(piece)
+                let bo = armed.push(piece)
+                XCTAssertFalse(ao.resetParser)
+                XCTAssertEqual(ao.bytes, piece, "Pocket 3 必须按原样送出，chunk \(chunk)")
+                a += ao.bytes
+                b += bo.bytes
+                i += n
+            }
+            a += off.flush()
+            b += armed.flush()
+            XCTAssertEqual(a, stream)
+            XCTAssertEqual(b, stream, "即使打开检测，未被下一帧头证明的 00 00 01 ff 也不能剥")
+            XCTAssertFalse(off.usesFrameHeader)
+            XCTAssertFalse(armed.usesFrameHeader)
+            off = DJILiveViewDeframer(armed: false)
+            armed = DJILiveViewDeframer(armed: true)
+        }
+
+        var parser = AnnexBParser()
+        var asm = H264AccessUnitAssembler()
+        var aus: [H264AccessUnit] = []
+        for nal in parser.push(stream) { aus += asm.push(nal) }
+        if let last = parser.flush() { aus += asm.push(last) }
+        XCTAssertEqual(asm.codec, .h264)
+        XCTAssertEqual(asm.sps, sps)
+        XCTAssertEqual(asm.pps, pps)
+        XCTAssertTrue(aus.contains { $0.isKeyframe && $0.nals.contains(idr) })
+    }
+
+    func testGOPCacheLimit() {
+        XCTAssertFalse(GOPCacheLimit.exceeded(frames: 900, bytes: 0))
+        XCTAssertTrue(GOPCacheLimit.exceeded(frames: 901, bytes: 0))
+        XCTAssertFalse(GOPCacheLimit.exceeded(frames: 1, bytes: GOPCacheLimit.maxBytes))
+        XCTAssertTrue(GOPCacheLimit.exceeded(frames: 1, bytes: GOPCacheLimit.maxBytes + 1))
     }
 
     func testHexParsing() {

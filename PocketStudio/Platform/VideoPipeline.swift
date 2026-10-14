@@ -35,6 +35,8 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
     let queue = DispatchQueue(label: "pocketstudio.video", qos: .userInteractive)
     let recQueue = DispatchQueue(label: "pocketstudio.record", qos: .utility)
     private var deframer = DJILiveViewDeframer()
+    /// 只有 Pocket 4 / 4P 才为 true。reset 不能把它清掉。
+    private var expectsFrameHeader = false
     private var parser = AnnexBParser()
     private var assembler = H264AccessUnitAssembler()
     private let decoder = H264Decoder()
@@ -53,7 +55,6 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
     private var lastNeedKeyframeAt = -100.0
     private var gopCache: [CMSampleBuffer] = []
     private var gopBytes = 0
-    private static let gopMaxBytes = 48 * 1024 * 1024
 
     // 锁保护：主线程读取
     private let lock = NSLock()
@@ -97,10 +98,19 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
 
     private func updateHealth(_ f: (inout VideoHealth) -> Void) { lock.withLock { f(&_health) } }
 
+    /// Pocket 4 / 4P 才尝试剥离 16 字节帧头。必须在 `reset()` 之前排队，reset 会保留这个值。
+    func setExpectsLiveViewFrameHeader(_ on: Bool) {
+        queue.async { [self] in
+            expectsFrameHeader = on
+            deframer.armed = on
+        }
+    }
+
     /// 完全重置（断开 / 刷新视频）：清空拆包、组帧、参数集、解码器、GOP 缓存、渲染器
     func reset() {
         queue.async { [self] in
-            deframer.reset(); parser.reset(); assembler.reset(); decoder.invalidate(); waitingKeyframe = true; waitSince = nil
+            deframer.reset(); deframer.armed = expectsFrameHeader
+            parser.reset(); assembler.reset(); decoder.invalidate(); waitingKeyframe = true; waitSince = nil
             loggedNoFrameHeader = false
             frameTimes = []; bytesWindow = []; chunkTimes = []; auTimes = []
             gopCache = []; gopBytes = 0; consecutiveErrors = 0
@@ -136,8 +146,14 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
             let framed = deframer.push(bytes)
             if framed.resetParser {
                 parser.reset(); assembler.reset(); decoder.invalidate(); waitingKeyframe = true; waitSince = nil
+                gopCache = []; gopBytes = 0
                 lock.withLock { _codec = nil; _frameHeader = "00 00 01 ff" }
-                onNote?("检测到 16 字节视频帧头 00 00 01 ff，已按声明长度剥离（Pocket 4/4P 布局，尚未用本机实机确认）")
+                onNote?("检测到 16 字节视频帧头 00 00 01 ff，长度与下一帧头对齐后才剥离")
+            } else if !deframer.armed {
+                if !loggedNoFrameHeader {
+                    loggedNoFrameHeader = true
+                    lock.withLock { _frameHeader = "无" }
+                }
             } else if deframer.stillSearching, !loggedNoFrameHeader, deframer.bytesSeen > 32_000 {
                 loggedNoFrameHeader = true
                 lock.withLock { _frameHeader = "无" }
@@ -246,11 +262,15 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
     }
 
     private func cacheGOP(_ sb: CMSampleBuffer, isKeyframe: Bool) {
+        // 解码已经连续失败时留下的样本是坏的，不能越积越多（实机 -12909 时 GOP 计到 1200+）。
+        if consecutiveErrors >= 3 { gopCache = []; gopBytes = 0; return }
         if isKeyframe { gopCache = []; gopBytes = 0 }
         guard isKeyframe || !gopCache.isEmpty else { return }
         let n = CMSampleBufferGetTotalSampleSize(sb)
-        if gopBytes + n > Self.gopMaxBytes { gopCache = []; gopBytes = 0; return }
         gopCache.append(sb); gopBytes += n
+        if GOPCacheLimit.exceeded(frames: gopCache.count, bytes: gopBytes) {
+            gopCache = []; gopBytes = 0
+        }
     }
 
     // MARK: Recording
