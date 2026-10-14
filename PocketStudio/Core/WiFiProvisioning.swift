@@ -33,7 +33,7 @@ nonisolated public struct WiFiCredentials: Equatable, Sendable {
     }
 }
 
-nonisolated public enum WiFiFetchFailure: Equatable, Sendable {
+nonisolated public enum WiFiFetchFailure: Error, Equatable, Sendable {
     case encrypted
     case ssidUnavailable
     case passwordUnavailable
