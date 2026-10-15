@@ -189,48 +189,6 @@ final class LiveViewController: NSViewController {
     }
     private var lastDims = (0, 0)
 
-    // MARK: 几何诊断（排查「画面放大缩小 / 窗口尺寸自己在变」）
-
-    private var lastGeoLine: String?
-    private var lastGeoLogAt: Double = 0
-    /// 只在几何变化时记一行：窗口、内容视图、画面视图、显示图层、布局区、安全区、侧栏、全屏、渲染器。
-    /// 用途：区分「窗口被改尺寸」「分栏被改尺寸」「画面视图/图层自己变了」「只是渲染器变了」。
-    /// 图层另记「呈现值」：模型值不变但呈现值在动 = 有隐式动画在跑（视觉上就是画面在缩放）。
-    private func logGeometryIfChanged(_ why: String) {
-        guard let w = view.window else { return }
-        let vf = videoView.frame
-        let lb = videoView.displayLayer.bounds
-        let pres = videoView.displayLayer.presentation().map { "\(Int($0.bounds.width))×\(Int($0.bounds.height))" } ?? "—"
-        let v = view.bounds
-        let ins = view.safeAreaInsets
-        let side: String = {
-            guard let c = w.windowController as? MainWindowController, let item = c.split.splitViewItems.first else { return "?" }
-            return item.isCollapsed ? "收" : String(format: "%.0f", item.viewController.view.frame.width)
-        }()
-        let line = "窗口 \(Int(w.frame.width))×\(Int(w.frame.height))"
-            + " · 视图 \(Int(v.width))×\(Int(v.height))"
-            + " · 画面 \(Int(vf.width))×\(Int(vf.height))@\(Int(vf.minX)),\(Int(vf.minY))"
-            + " · 图层 \(Int(lb.width))×\(Int(lb.height))@\(Int(lb.origin.x)),\(Int(lb.origin.y))"
-            + " · 呈现 \(pres)"
-            + " · 布局区 \(Int(w.contentLayoutRect.width))×\(Int(w.contentLayoutRect.height))"
-            + " · 安全区 \(Int(ins.top))/\(Int(ins.bottom))"
-            + " · 侧栏 \(side)"
-            + " · 全屏 \(w.styleMask.contains(.fullScreen) ? 1 : 0)"
-            + " · 解码 \(model.videoStats.width)×\(model.videoStats.height)"
-            + " · 渲染器 \(videoView.rendererStatusText)"
-        guard line != lastGeoLine else { return }
-        let now = ProcessInfo.processInfo.systemUptime
-        guard now - lastGeoLogAt >= 0.2 else { return }   // 变化密集时最多 5 Hz，避免日志被刷掉
-        lastGeoLine = line
-        lastGeoLogAt = now
-        model.log("[几何/\(why)] \(line)")
-    }
-
-    override func viewDidLayout() {
-        super.viewDidLayout()
-        logGeometryIfChanged("布局")
-    }
-
     private func buildPlaceholder() {
         let icon = NSImageView(image: UI.symbol("camera.aperture", size: 56, weight: .thin) ?? NSImage())
         icon.contentTintColor = NSColor.white.withAlphaComponent(0.8)
@@ -521,7 +479,6 @@ final class LiveViewController: NSViewController {
         \(cam.summary)
         """
         statusBar.update(model: model)
-        logGeometryIfChanged("刷新")
     }
 
     // MARK: Keyboard / trackpad

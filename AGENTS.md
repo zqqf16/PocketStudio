@@ -155,7 +155,7 @@ PocketStudioTests/  CoreProtocolTests、CameraLinkLoopbackTests（本地 UDP 假
   内容区的最小宽度就跟着变 → 分栏把差额甩给侧栏、窗口被 Auto Layout 撑大 → 画面肉眼可见地缩放抖动（实测 视图 901↔907、侧栏 190↔196、窗口 1088↔1098）。
   规则：**动态文字只允许截断（显示「…」），永不参与最小宽度**——动态标签一律 `.defaultLow` 压缩阻力，
   容纳它们的 `NSStackView`（状态栏 row、`StatusItem`、顶栏、`ChipView`）一律把 `setClippingResistancePriority(_:for: .horizontal)` 降到 `.defaultHigh`。
-  新增任何「会随时间变宽/变窄」的读数时都要照做。诊断工具：`~/Library/Logs/PocketStudio/pocket.log` 里的 `[几何/…]` 行只在几何真变时出现。
+  新增任何「会随时间变宽/变窄」的读数时都要照做。（复现与验证手法见 §8 第 18 条。）
 
 ## 5f. 拖动云台后断线（2026-10-10 14:17 实机日志 1f0f39c2…）
 
@@ -253,7 +253,7 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
     侧栏被挤到最小后窗口就被 Auto Layout 撑大 10 点，画面随之等比缩放（`resizeAspect`）＋横移 3 点，看起来就是「周期性放大缩小」。
     本机复现（`POCKETSTUDIO_UI_CHURN` 注入 10Hz 刷新 + 人造长文本）：修复关 → 窗口 1088→1212；修复开 → 窗口/视图/侧栏恒定、文字显示「…」。
     修复：row / `StatusItem` / 顶栏 / `ChipView` 的 `setClippingResistancePriority(_:for: .horizontal)` 由默认 `.required` 降到 `.defaultHigh`，读数标签的压缩阻力降到 `.defaultLow`；状态栏间距 18→14。
-    诊断：`[几何/…]`（`MainWindowController.installGeometryDiagnostics` + `LiveViewController.logGeometryIfChanged`）只在几何真变时记一行，稳定连接时不该出现。
+    当时的复现 / 验证工具是临时的（注入 10Hz `.modelChanged` + 人造长文本 + 只在几何变化时记一行 `[几何/…]`），已随修复删掉；结论写在本条与 §5e。
 
 ## 9. 已验证 / 未验证
 
