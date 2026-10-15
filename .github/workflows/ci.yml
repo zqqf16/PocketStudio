@@ -1,0 +1,37 @@
+# CI：协议层单测（Linux，两种默认隔离）+ 完整构建与 Xcode 测试（macOS 26）
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core-tests:
+    name: 协议层测试（Linux / SwiftPM）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.2"
+      - name: 默认 MainActor 隔离
+        run: Tools/run-linux-tests.sh
+      - name: 默认 nonisolated 隔离
+        run: Tools/run-linux-tests.sh
+        env:
+          ISOLATION: nonisolated
+
+  macos-build-test:
+    name: 构建 + Xcode 测试（macOS 26）
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 XcodeGen 并生成工程
+        run: brew install xcodegen && xcodegen generate
+      - name: 检查 .xcodeproj 与 project.yml 的漂移（仅提醒，不阻断）
+        continue-on-error: true
+        run: git diff --exit-code --stat -- PocketStudio.xcodeproj
+      - name: 构建与单元测试（不签名）
+        run: >
+          xcodebuild test -project PocketStudio.xcodeproj -scheme PocketStudio
+          -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO

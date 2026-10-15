@@ -12,14 +12,20 @@ import Darwin
 @testable import PocketStudioCore
 #endif
 
-/// 极简假相机：绑定 127.0.0.1:port，记录收到的包，回握手，并向客户端推送视频/遥测
+/// 极简假相机：绑定 127.0.0.1:port（传 0 让内核分配端口，避免并行测试抢端口），记录收到的包与到达时刻，回握手，并向客户端推送视频/遥测
 nonisolated final class FakeCamera: @unchecked Sendable {
     let fd: Int32
+    /// 实际绑定端口（init 传 0 时由内核分配）
+    let port: UInt16
+    /// 是否应答握手（关掉后用于测试「握手进行中 stop()」）
+    let respondsToHandshake: Bool
     var peer = sockaddr_in()
     var received: [Bytes] = []
+    var receivedAt: [Double] = []
     let lock = NSLock()
     var running = true
-    init(port: UInt16) {
+    init(port: UInt16 = 0, respondsToHandshake: Bool = true) {
+        let fd: Int32
         #if os(Linux)
         fd = socket(AF_INET, Int32(SOCK_DGRAM.rawValue), 0)
         #else
@@ -32,6 +38,11 @@ nonisolated final class FakeCamera: @unchecked Sendable {
         a.sin_family = sa_family_t(AF_INET); a.sin_port = port.bigEndian
         inet_pton(AF_INET, "127.0.0.1", &a.sin_addr)
         _ = withUnsafePointer(to: &a) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        var bound = sockaddr_in(); var blen = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &bound) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &blen) } }
+        self.fd = fd
+        self.respondsToHandshake = respondsToHandshake
+        self.port = UInt16(bigEndian: bound.sin_port)
         var tv = timeval(tv_sec: 0, tv_usec: 200_000)
         _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         Thread { self.loop() }.start()
@@ -49,13 +60,14 @@ nonisolated final class FakeCamera: @unchecked Sendable {
                 recvfrom(fd, raw.baseAddress, 65536, 0, $0, &len) } } }
             guard n > 0 else { continue }
             let d = Array(buf[0 ..< n])
-            lock.lock(); peer = from; received.append(d); lock.unlock()
-            if let h = DJIUDPFrame.parse(d), h.type == DJIUDPType.handshake {
+            lock.lock(); peer = from; received.append(d); receivedAt.append(ProcessInfo.processInfo.systemUptime); lock.unlock()
+            if respondsToHandshake, let h = DJIUDPFrame.parse(d), h.type == DJIUDPType.handshake {
                 send(DJIUDPFrame.header(length: 9, sessionID: 0xABCD, seq: 0, type: 0) + [0])
             }
         }
     }
     func packets() -> [Bytes] { lock.lock(); defer { lock.unlock() }; return received }
+    func arrivals() -> [Double] { lock.lock(); defer { lock.unlock() }; return receivedAt }
     deinit { running = false; close(fd) }
 }
 
@@ -69,8 +81,8 @@ nonisolated final class Locked<T>: @unchecked Sendable {
 
 nonisolated final class CameraLinkLoopbackTests: XCTestCase {
     func testEndToEnd() throws {
-        let cam = FakeCamera(port: 19004)
-        let link = CameraLink(host: "127.0.0.1", port: 19004, transport: BSDDatagramTransport())
+        let cam = FakeCamera(port: 0)
+        let link = CameraLink(host: "127.0.0.1", port: cam.port, transport: BSDDatagramTransport())
         let videoGot = expectation(description: "video")
         let video = Locked(Bytes())
         link.onVideo = { b in if video.with({ $0 += b; return $0.count }) >= 5 { videoGot.fulfill() } }
@@ -113,5 +125,55 @@ nonisolated final class CameraLinkLoopbackTests: XCTestCase {
         XCTAssertEqual(video.value, [0, 0, 0, 1, 0x65])
         XCTAssertEqual(snap.value?.camera.recording, true)
         XCTAssertEqual(snap.value?.sessionID, 0xABCD)
+    }
+
+    /// 握手进行中 stop()：必须以 .cancelled 立即收敛续体。
+    /// 修复前 stop() 只把 handshakeCompletion 置 nil 并取消超时定时器 → withCheckedContinuation 永久悬挂（任务泄漏）。
+    func testStopDuringHandshakeResumesCancelled() {
+        let cam = FakeCamera(port: 0, respondsToHandshake: false)
+        let link = CameraLink(host: "127.0.0.1", port: cam.port, transport: BSDDatagramTransport())
+        let done = expectation(description: "握手以取消收敛")
+        let err = Locked<LinkError?>(nil)
+        link.connect(timeout: 10) { r in
+            if case let .failure(e) = r { err.with { $0 = e } }
+            done.fulfill()   // 二次 resume 会因 over-fulfill 直接失败
+        }
+        Thread.sleep(forTimeInterval: 0.3)   // 确保握手已发出并在等待
+        link.stop()
+        wait(for: [done], timeout: 3)        // 远小于 10s 超时：只能来自 stop() 的 resume
+        XCTAssertEqual(err.value, .cancelled)
+    }
+
+    /// 用户命令统一限速 ≥300ms：快门 + 录制开关连点也不能形成突发（§5d：突发会让相机可靠通道卡死且不自愈）。
+    /// 修复前 toggleRecording 直发，紧跟快门后可以 0 间隔冲到相机。
+    func testUserCommandsAreRateLimited() {
+        let cam = FakeCamera(port: 0)
+        let link = CameraLink(host: "127.0.0.1", port: cam.port, transport: BSDDatagramTransport())
+        let hs = expectation(description: "hs")
+        link.connect(timeout: 3) { r in if case .success = r { hs.fulfill() } else { XCTFail("\(r)") } }
+        wait(for: [hs], timeout: 5)
+
+        link.takePhoto()
+        link.toggleRecording()
+        link.startRecording()
+        Thread.sleep(forTimeInterval: 1.5)    // 3 条命令按 300ms 排布，1.5s 足够全部送达
+        link.stop()
+
+        let pk = cam.packets()
+        let arrivals = cam.arrivals()
+        XCTAssertEqual(pk.count, arrivals.count)
+        var photoAt: Double?
+        var recAt: [Double] = []
+        for (i, d) in pk.enumerated() {
+            guard let h = DJIUDPFrame.parse(d), h.type == DJIUDPType.command else { continue }
+            for p in DUML.parse(h.body) {
+                if p.cmdSet == 2, p.cmdID == 0x01 { photoAt = arrivals[i] }
+                if p.cmdSet == 2, p.cmdID == 0x02 { recAt.append(arrivals[i]) }
+            }
+        }
+        guard let photoAt else { return XCTFail("没有收到拍照命令") }
+        XCTAssertEqual(recAt.count, 2, "toggleRecording（开始）+ startRecording 两条录制命令都应在限速后送达")
+        let gaps = [recAt[0] - photoAt, recAt[1] - recAt[0]]
+        for g in gaps { XCTAssertGreaterThanOrEqual(g, 0.25, "相邻用户命令间隔应 ≥300ms（实测 \(g)s）") }
     }
 }

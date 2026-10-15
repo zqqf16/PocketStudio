@@ -223,7 +223,7 @@ nonisolated final class LinkRecoveryTests: XCTestCase {
     }
 
     private func ev(_ m: inout VideoHealthMonitor, _ now: Double, v: Double?, d: Double?, t: Double?, r: Double? = nil, busy: Bool = false) -> VideoRecoveryAction {
-        m.evaluate(VideoHealthInput(now: now, connectedAt: 0, lastVideoPacket: v, lastDecoded: d, lastTelemetry: t, lastReply: r, cameraBusy: busy))
+        m.evaluate(VideoHealthInput(now: now, connectedAt: 0, lastVideoPacket: v, lastDecoded: d, lastTelemetry: t, lastReliablePacket: r, cameraBusy: busy))
     }
 
     /// 13:33:54 日志场景：丢包解码失败，但视频 546 片段/s、应答 12/s → 只能重建解码器，绝不能动链路

@@ -25,8 +25,17 @@ final class AppSettings {
     var ssid: String {
         get { d.string(forKey: "ssid") ?? "" } set { d.set(newValue, forKey: "ssid"); notify() }
     }
+    /// 钥匙串里的相机热点密码。首次读取后缓存在内存：AppModel.log() 每行都要用它做打码，
+    /// 不能每行同步查一次钥匙串（主线程 IO）。写入路径只有本属性，缓存不会过期。
+    private var cachedPassword: String?
     var password: String {
-        get { Keychain.read(account: "camera-wifi") ?? "" } set { Keychain.write(newValue, account: "camera-wifi"); notify() }
+        get {
+            if let cachedPassword { return cachedPassword }
+            let p = Keychain.read(account: "camera-wifi") ?? ""
+            cachedPassword = p
+            return p
+        }
+        set { cachedPassword = newValue; Keychain.write(newValue, account: "camera-wifi"); notify() }
     }
     var cameraIP: String {
         get { d.string(forKey: "cameraIP") ?? DJIUDPFrame.cameraIP } set { d.set(newValue, forKey: "cameraIP"); notify() }

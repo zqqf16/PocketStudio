@@ -28,13 +28,14 @@ nonisolated public struct LinkSnapshot: Equatable, Sendable {
     public init() {}
 }
 
-nonisolated public enum LinkError: Error, Sendable, CustomStringConvertible {
-    case transport(String), handshakeTimeout, notConnected
+nonisolated public enum LinkError: Error, Sendable, Equatable, CustomStringConvertible {
+    case transport(String), handshakeTimeout, notConnected, cancelled
     public var description: String {
         switch self {
         case let .transport(s): return "网络错误：\(s)"
         case .handshakeTimeout: return "UDP 握手超时（相机无应答）"
         case .notConnected: return "尚未连接相机"
+        case .cancelled: return "连接已取消"
         }
     }
 }
@@ -181,7 +182,9 @@ nonisolated public final class CameraLink: @unchecked Sendable {
             running = false
             timers.forEach { $0.cancel() }; timers = []
             handshakeTimer?.cancel(); handshakeTimer = nil
-            handshakeCompletion = nil
+            // 握手进行中被 stop（取消连接 / teardown / 重建链路）：必须 resume，
+            // 否则 AppModel.openLink 的 withCheckedContinuation 永久悬挂（超时定时器刚被取消）。
+            if let c = handshakeCompletion { handshakeCompletion = nil; c(.failure(.cancelled)) }
             core.stopVideoHeartbeat()
             transport.stop()
         }
@@ -256,7 +259,9 @@ nonisolated public final class CameraLink: @unchecked Sendable {
             guard running else { return }
             let st = snapshotState.camera
             let start = !st.recording
-            core.send(CameraCommand.recordCommand(start: start, mode: st.mode))
+            // 走统一的用户命令限速（相邻 ≥300ms），与快门 / 模式切换一致：
+            // 直发会让「录制开关 + 模式切换」在 300ms 内形成突发（§5d：突发会让相机可靠通道卡死）。
+            send(CameraCommand.recordCommand(start: start, mode: st.mode))
             completion?(start, st.mode)
         }
     }

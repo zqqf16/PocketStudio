@@ -156,6 +156,7 @@ nonisolated public struct DeviceProfile: Sendable, Equatable {
             let cid = Array(raw.prefix(2))
             if cid == DJIBLE.djiCompanyID { vendor = .dji }
             else if cid == DJIBLE.xtraCompanyID { vendor = .xtra }
+            // 型号取第 3 字节（单字节）；DJIBLE.identify 用的是 [2..<4] 双字节键，两者刻意不一致（见 CoreProtocolTests）
             if vendor != .none, raw.count >= 3 { modelByte = raw[2] }
         }
         let named = model(fromAdvertisedName: localName)

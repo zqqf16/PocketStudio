@@ -37,8 +37,6 @@ final class LiveViewController: NSViewController {
 
     private let joystick = JoystickView()
     private var joystickPanel: NSView!
-    private let speedSlider = NSSlider(value: 0.3, minValue: 0.1, maxValue: 1.0, target: nil, action: nil)
-    private let speedLabel = UI.label("", size: 12, color: .white, mono: true)
     private let gimbalModeButton = NSPopUpButton(frame: .zero, pullsDown: true)
 
     private let statusBar = StatusBarView()
@@ -62,6 +60,8 @@ final class LiveViewController: NSViewController {
     private var gimbalInput = (yaw: 0.0, pitch: 0.0)
     private var keepAlive: Timer?
     private var observers: [NSObjectProtocol] = []
+    /// 随窗口/激活状态变化的停止钩子（viewDidAppear 安装、viewWillDisappear 移除；不能和 observers 混放，否则反复进出会累积）
+    private var stopObservers: [NSObjectProtocol] = []
 
     override func loadView() {
         let root = NSView()
@@ -90,9 +90,8 @@ final class LiveViewController: NSViewController {
             MainActor.assumeIsolated { self?.refresh() }
         })
         observers.append(NotificationCenter.default.addObserver(forName: .settingsChanged, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshSpeed() }
+            MainActor.assumeIsolated { self?.refresh() }   // 设置变化会刷新云台速度提示等
         })
-        refreshSpeed()
         refresh()
         let ta = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self, userInfo: nil)
         view.addTrackingArea(ta); trackingArea = ta
@@ -398,11 +397,6 @@ final class LiveViewController: NSViewController {
 
     // MARK: Refresh
 
-    private func refreshSpeed() {
-        speedSlider.doubleValue = model.settings.gimbalSpeed
-        speedLabel.stringValue = String(format: "%.1f", model.settings.gimbalSpeed)
-    }
-
     private func refresh() {
         let connected = model.isConnected
         if connected && model.videoStats.frames > 0 { everShowedFrame = true }
@@ -498,6 +492,10 @@ final class LiveViewController: NSViewController {
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
         stopAllGimbalInput()
         keepAlive?.invalidate(); keepAlive = nil
+        // 停止钩子绑定窗口 / 激活状态，随本次消失一并移除；否则每次回到本页都会再装 6 个，
+        // 侧栏来回切换后同一事件会触发 N 次 stopAllGimbalInput。
+        for o in stopObservers { NotificationCenter.default.removeObserver(o) }
+        stopObservers.removeAll()
     }
 
     // MARK: Gimbal input（统一入口：任何输入源结束都发可靠停止）
@@ -533,11 +531,11 @@ final class LiveViewController: NSViewController {
         let nc = NotificationCenter.default
         let stop: @Sendable (Notification) -> Void = { [weak self] _ in MainActor.assumeIsolated { self?.stopAllGimbalInput() } }
         for name in [NSApplication.willResignActiveNotification, NSApplication.didResignActiveNotification, NSApplication.willHideNotification] {
-            observers.append(nc.addObserver(forName: name, object: nil, queue: .main, using: stop))
+            stopObservers.append(nc.addObserver(forName: name, object: nil, queue: .main, using: stop))
         }
         if let w = view.window {
             for name in [NSWindow.didResignKeyNotification, NSWindow.didMiniaturizeNotification, NSWindow.willCloseNotification] {
-                observers.append(nc.addObserver(forName: name, object: w, queue: .main, using: stop))
+                stopObservers.append(nc.addObserver(forName: name, object: w, queue: .main, using: stop))
             }
         }
         keepAlive = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
@@ -693,7 +691,6 @@ final class LiveViewController: NSViewController {
     @objc private func flipTapped() { stopAllGimbalInput(); model.flipGimbal() }
     @objc private func gimbalSpeedSelected(_ s: NSMenuItem) { if let v = GimbalSpeedSetting(rawValue: UInt8(s.tag)) { model.setGimbalSpeedSetting(v) } }
     @objc private func stopGimbalTapped() { stopAllGimbalInput(); model.log("已发送云台停止（零速 ×4）") }
-    @objc private func speedChanged() { model.settings.gimbalSpeed = (speedSlider.doubleValue * 10).rounded() / 10 }
 }
 
 /// 底部 Liquid Glass 状态栏

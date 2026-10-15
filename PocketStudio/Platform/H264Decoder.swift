@@ -104,7 +104,9 @@ nonisolated final class H264Decoder: @unchecked Sendable {
             CMBlockBufferReplaceDataBytes(with: raw.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: data.count)
         }
         guard copied == noErr else { return nil }
-        var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: 60), presentationTimeStamp: pts, decodeTimeStamp: .invalid)
+        // duration 交给下游推断：这里不知道真实帧率（Pocket 3 预览 ≈30fps、4/4P 资料为 25fps），
+        // 硬编码 1/60 会让 MP4 直通写出错误的样本时长；AVAssetWriter 对 .invalid 会按相邻 PTS 差值推断。
+        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
         var size = data.count
         var sb: CMSampleBuffer?
         guard CMSampleBufferCreateReady(allocator: kCFAllocatorDefault, dataBuffer: block, formatDescription: fd,

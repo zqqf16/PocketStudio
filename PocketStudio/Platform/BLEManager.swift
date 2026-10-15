@@ -377,5 +377,8 @@ final class BLEManager: NSObject, @preconcurrency CBCentralManagerDelegate, @pre
         if let p = peripheral { central.cancelPeripheralConnection(p) }
         peripheral = nil; writeChar = nil; notifyChar = nil
         if let c = scanContinuation { scanContinuation = nil; central.stopScan(); c.resume(returning: []) }
+        if let c = confirmContinuation { confirmContinuation = nil; c.resume(returning: false) }
+        // 连接 / 应答等待者立即收敛，不等各自的超时（否则取消连接后还会卡几秒）
+        failConnection(BLEError.notConnected)
     }
 }

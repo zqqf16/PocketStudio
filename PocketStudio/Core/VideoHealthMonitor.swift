@@ -30,12 +30,14 @@ nonisolated public struct VideoHealthInput: Sendable {
     public var lastVideoPacket: Double?
     public var lastDecoded: Double?
     public var lastTelemetry: Double?
-    public var lastReply: Double?
+    /// 最近在「可靠通道」收到相机包的时刻（等价 LinkSnapshot.lastReliableAt，由 0x03 类包刷新）。
+    /// 命令卡死判定用它——不是 0x80/0xC0 应答（那是诊断行里的「相机应答 n/s」，两者无直接关系）。
+    public var lastReliablePacket: Double?
     public var cameraBusy: Bool
     public init(now: Double, connectedAt: Double, lastVideoPacket: Double?, lastDecoded: Double?,
-                lastTelemetry: Double?, lastReply: Double? = nil, cameraBusy: Bool = false) {
+                lastTelemetry: Double?, lastReliablePacket: Double? = nil, cameraBusy: Bool = false) {
         self.now = now; self.connectedAt = connectedAt; self.lastVideoPacket = lastVideoPacket
-        self.lastDecoded = lastDecoded; self.lastTelemetry = lastTelemetry; self.lastReply = lastReply
+        self.lastDecoded = lastDecoded; self.lastTelemetry = lastTelemetry; self.lastReliablePacket = lastReliablePacket
         self.cameraBusy = cameraBusy
     }
 }
@@ -64,7 +66,7 @@ nonisolated public struct VideoHealthMonitor: Sendable {
         let decodedAge = i.now - (i.lastDecoded ?? i.connectedAt)
         let videoAge = i.now - (i.lastVideoPacket ?? i.connectedAt)
         let telemAge = i.now - (i.lastTelemetry ?? i.connectedAt)
-        let replyAge = i.now - (i.lastReply ?? i.connectedAt)
+        let replyAge = i.now - (i.lastReliablePacket ?? i.connectedAt)
 
         if stalled, i.lastDecoded != nil, decodedAge < stallAfter {
             reset(); return .recovered
@@ -76,7 +78,7 @@ nonisolated public struct VideoHealthMonitor: Sendable {
         }
         linkLostReported = false
         if replyAge < 1.5 { commandStallReported = false }
-        if replyAge >= commandStallAfter, !i.cameraBusy, i.lastReply != nil, !commandStallReported, !rebuildRequested {
+        if replyAge >= commandStallAfter, !i.cameraBusy, i.lastReliablePacket != nil, !commandStallReported, !rebuildRequested {
             commandStallReported = true; rebuildRequested = true
             return .commandStall
         }

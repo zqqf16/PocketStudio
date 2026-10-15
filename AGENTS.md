@@ -139,7 +139,7 @@ PocketStudioTests/  CoreProtocolTests、CameraLinkLoopbackTests（本地 UDP 假
 当时 App 发送约 47 条命令/s：30Hz 云台零速（静止也发）+ 0x8E 5Hz + 0x4F 5Hz（均要求应答，≈12 应答/s）+ 其他。OPC 原话：“overlapping Tasks flooded the camera so replies stopped”；OPC/Mimo 云台只在按住时发、GET ~1Hz。
 结论（中高置信）：命令过密 + 突发 → 相机可靠通道卡死且不会自愈。
 修复：云台静止不再发包（streaming 默认关，松手补发 stopRepeats 次零速）；0x8E/0x4F 降为 1Hz，0xA0 2s、0x61 5s、0x81/82 5s（0x88 保持 1Hz）；
-用户命令间隔 ≥300ms；模式切换防抖 400ms 只发最后一次；看门狗 `.commandStall`：应答 6s 无 → 立即重连（不等视频死）。
+用户命令间隔 ≥300ms（**所有**用户命令走同一条限速 `send()`；`toggleRecording` 曾直发绕过，已修）；模式切换防抖 400ms 只发最后一次；看门狗 `.commandStall`：应答 6s 无 → 立即重连（不等视频死）。
 重连：UDP 原地重建 0/5 成功、蓝牙唤醒 5/5 成功 → `ReconnectPolicy.rebuildAttempts = 0`，直接蓝牙唤醒（1s 后）。
 
 ## 5e. 沉浸式取景 UI（2026-10-10 14:10）
@@ -220,7 +220,7 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
 ## 7. 构建与测试
 
 - **macOS**：Xcode 26 / macOS 26 SDK。`brew install xcodegen && xcodegen generate`，打开 `PocketStudio.xcodeproj`，选择签名团队后运行。部署目标 macOS 26.0。未开启 App Sandbox（CoreWLAN 加入网络在沙盒中受限）。
-- **测试**：Xcode 中 ⌘U；或 `Tools/run-linux-tests.sh`（Swift 6.2+，`-warnings-as-errors`，默认 MainActor 隔离）；`ISOLATION=nonisolated Tools/run-linux-tests.sh` 测另一种默认值。当前 67 个协议层测试（含机型档、HEVC、Pocket 3 帧头回归、链路保活调度、Camera:0xB3，以及 Wi-Fi 回复解析 / 读取状态机 / 打码）。两种默认隔离都通过。
+- **测试**：Xcode 中 ⌘U；或 `Tools/run-linux-tests.sh`（Swift 6.2+，`-warnings-as-errors`，默认 MainActor 隔离）；`ISOLATION=nonisolated Tools/run-linux-tests.sh` 测另一种默认值。当前 69 个协议层测试（含机型档、HEVC、Pocket 3 帧头回归、链路保活调度、Camera:0xB3、握手取消收敛、用户命令限速，以及 Wi-Fi 回复解析 / 读取状态机 / 打码）。两种默认隔离都通过。CI（`.github/workflows/ci.yml`）：Linux 跑两种隔离的协议测试；macOS 26 上 `xcodegen generate` → `xcodebuild test`（不签名）。
 - 新增 Swift 文件后需重新 `xcodegen generate`（Linux 上可自行编译 XcodeGen）。
 
 ## 8. 已踩过的坑（及修复）
@@ -241,14 +241,15 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
 14. **「查看」按钮没反应**：工具栏项不在默认工具栏且无 target；现在默认显示「查看文件」并显式 target，优先选中最近的录制，不存在则打开文件夹。
 15. **把 General:0x4F 当成视频心跳**：原 Python `start_video()` 注释写「Mimo VPN 抓包里的 5Hz 视频心跳」，但同一函数的启动三步只有 0x88 + 0x81 + 0x82，0x4F 只在随后的循环里。dji-firmware-tools 把它命名为 Get Cfg File；DUMLrub `cmd_common_get_cfg_file` 的负载就是 `type u8 + offset u32le + length u32le`。本应用的 `01 00 XX 00 00 ff ff ff ff` 即 type=1、length=0xFFFFFFFF，计数器写在 offset 的第 2 字节。实机每次应答约 265 字节 XML，把可靠窗口占满后相机停止应答命令（§5b、§5d）。OPC 把画面寿命归因于 0x88/0x81 注册。默认停止 0x4F（启动时也不发一次），改发 General:0x0E 1Hz。设置可切回旧版做 A/B。停发之后画面能否单靠 0x88 维持，尚未实机确认。
 16. **Pocket 3 实机画面全是 -12909**：`DJILiveViewDeframer` 把 Annex-B 里的 `00 00 01 ff`（起始码，或 `00 00 00 01` 错一位）加上任意像样的小端长度当成 16 字节帧头，从中间删掉一段 NAL。诊断行会写「帧头 00 00 01 ff」，同时 AU 仍有 ~30/s、解码停在几十秒前。修复：Pocket 3 / 未识别机型不启用剥离；启用时也要等下一帧头证明长度。GOP 缓存在连续解码错误或超过 900 帧 / 48MB 时清空。
+17. **取消连接后 `connectTask` 永久悬挂**：`CameraLink.stop()` 把 `handshakeCompletion` 置 nil 却不 resume，还先取消了 10s 超时定时器 → `AppModel.openLink` 的 `withCheckedContinuation` 在「握手进行中取消连接 / teardown / 重建」时永不返回（任务泄漏；`withCheckedContinuation` 不响应 Task 取消）。修复：`stop()` 以 `.cancelled` 收敛（`LinkError` 新增该 case 并 Equatable），`openLink` 映射为 `CancellationError`，`udpStep` 放行不包装；回归测试 `testStopDuringHandshakeResumesCancelled`。同轮：`toggleRecording` 改走统一 300ms 限速；`installStopHooks` 的 6 个停止钩子改为随 `viewWillDisappear` 移除（此前每次回到实时页都追加、侧栏来回切换后同一事件触发 N 次）；`AppSettings.password` 内存缓存（`log()` 每行都要读它打码）；Debug 页日志刷新节流 0.25s。
 
 ## 9. 已验证 / 未验证
 
-- **已验证（Linux，Swift 6.2.3 编译 + 单测）**：CRC、DUML、UDP 头/握手/ACK/命令包与 Python 逐字节一致；状态解析；BLE 帧与识别；H.264 Annex-B 拆分与访问单元组装；HEVC 参数集识别、IRAP 16–21 关键帧；`00 00 01 ff` 只有在下一帧头对齐时才剥离，Pocket 3 形态的 Annex-B（含起始码和片内 `00 00 01 ff`）原样通过；机型识别（0x20/0x21/0x22、广播名、Xtra 端口 10004）；模式表（Pocket 3 拍照 05，4P 拍照 0x17 / 实况 0x4D，Pocket 4 复用 Pocket 3）；4/4P 不把 0x80/0xDC 当成 SD 容量；默认保活发 General:0x0E、不发 0x4F，旧版可切回；关键帧同时发 0x09/0xA8 与 Camera:0xB3；`CameraLink` 与本地假相机的完整回环（握手、ACK、心跳、视频、注册、拍照、云台）；云台轴映射 / 停止 / 看门狗。Wi-Fi：`[status][len][utf8]` 解析、0xE4、非法 UTF-8 视为不可读、读取状态机（3 次 / 20 秒、广播名回退、加密即停、写间隔 200ms）、手动/缓存选择、扫描重试 90 秒、密码打码。这些是纯逻辑测试，没有相机。
+- **已验证（Linux，Swift 6.2.3 编译 + 单测）**：CRC、DUML、UDP 头/握手/ACK/命令包与 Python 逐字节一致；状态解析；BLE 帧与识别；H.264 Annex-B 拆分与访问单元组装；HEVC 参数集识别、IRAP 16–21 关键帧；`00 00 01 ff` 只有在下一帧头对齐时才剥离，Pocket 3 形态的 Annex-B（含起始码和片内 `00 00 01 ff`）原样通过；机型识别（0x20/0x21/0x22、广播名、Xtra 端口 10004）；模式表（Pocket 3 拍照 05，4P 拍照 0x17 / 实况 0x4D，Pocket 4 复用 Pocket 3）；4/4P 不把 0x80/0xDC 当成 SD 容量；默认保活发 General:0x0E、不发 0x4F，旧版可切回；关键帧同时发 0x09/0xA8 与 Camera:0xB3；`CameraLink` 与本地假相机的完整回环（握手、ACK、心跳、视频、注册、拍照、云台；动态端口）；云台轴映射 / 停止 / 看门狗；握手中途 stop 以 `.cancelled` 收敛（防续体悬挂）、用户命令 ≥300ms 限速（假相机记录到达时刻）。Wi-Fi：`[status][len][utf8]` 解析、0xE4、非法 UTF-8 视为不可读、读取状态机（3 次 / 20 秒、广播名回退、加密即停、写间隔 200ms）、手动/缓存选择、扫描重试 90 秒、密码打码。这些是纯逻辑测试，没有相机。
 - **实机已确认（用户反馈）**：应用可在真实 Pocket 3 上构建运行；云台轴顺序 `[pitch, roll, yaw]`。Pocket 4 / 4P **没有**用本应用实机确认。
 - **依据第三方实机抓包（OpenPocketCine）但本应用尚未实机复测**：相机快门/录像/模式命令、云台回中/模式/翻转/转速、0x03/0xDA 初始化、0x80/0x05 新解析、GOP 缓存录制；Pocket 4/4P 的型号字节 0x21/0x22、PIN `osmo`、HEVC 预览、16 字节帧头、4P 拍照 0x17 / 实况 0x4D / 慢动作 0x00、Xtra UDP 10004。SuperPhoto（`0x02/0x12`，快门 `0F`）只记在常量里，**不发送**。
 - **未在 Linux 编译、仅人工审阅**：所有 `Platform/`、`App/`、`Views/` 文件（用户已在 Xcode 26 编译通过的版本之后的改动：云台 UI 停止钩子、`LocalNetworkPermission`）。
-- **未实机验证**：云台方向正负（反转开关默认关）；roll 字段（@2，OPC 用四元数求）；BLE RTMP 直播流程；CoreWLAN 自动加入在各系统版本上的表现；本地网络授权检测（拒绝码 -65570 的实际触发）；MP4 录制的时间戳与 QuickTime 兼容性。
+- **未实机验证**：云台方向正负（反转开关默认关）；roll 字段（@2，OPC 用四元数求）；BLE RTMP 直播流程；CoreWLAN 自动加入在各系统版本上的表现；本地网络授权检测（拒绝码 -65570 的实际触发）；MP4 录制的时间戳与 QuickTime 兼容性（2026-10-15 起 `makeSampleBuffer` 的 sample duration 由写死的 1/60 改为 `.invalid`，由 AVAssetWriter 按 PTS 差值推断——请实机录一段确认）。
 - **未实机验证（§5g）**：默认停发 0x4F 后画面是否仍能靠 0x88 维持；General:0x0E 空负载发往 Camera(1,0) 是否被 Pocket 3 接受（应答负载未知）；Camera:0xB3 空负载是否请求到 IDR。设置「Mimo 链路心跳」默认开，关掉即恢复旧版 0x4F，供 A/B。
 - **未实机验证（§5i）**：0x07/0x07、0x07/0x0E 的请求负载是否为空（日志会打原始请求 hex）；回复在当前 Pocket 3/4 固件上是明文还是 0x12/0x92 加密；0x07/0x46 ACK（flags 0xC0、负载 `00`）是否被接受。解析、重试和打码只在 Linux 单测里验证过。
 

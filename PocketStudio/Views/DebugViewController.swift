@@ -94,10 +94,10 @@ final class DebugViewController: NSViewController, NSTableViewDataSource, NSTabl
         ])
         grid.rowSpacing = 10; grid.column(at: 0).xPlacement = .trailing
         let presets = UI.hstack([
-            UI.button("拍照 2:0x01", target: self, action: #selector(presetPhoto)),
-            UI.button("开始录制 2:0x20", target: self, action: #selector(presetRecStart)),
-            UI.button("停止录制 2:0x21", target: self, action: #selector(presetRecStop)),
-            UI.button("视频模式 2:0x02", target: self, action: #selector(presetMode)),
+            UI.button("拍照 2:01 [01]", target: self, action: #selector(presetPhoto)),
+            UI.button("开始录像 2:02 [01]", target: self, action: #selector(presetRecStart)),
+            UI.button("停止录像 2:02 [00]", target: self, action: #selector(presetRecStop)),
+            UI.button("拍照模式 2:E1 [05]（Pocket 3）", target: self, action: #selector(presetMode)),
         ], spacing: 8)
         let stack = UI.vstack([
             UI.title("发送原始 DUML 命令"),
@@ -131,9 +131,30 @@ final class DebugViewController: NSViewController, NSTableViewDataSource, NSTabl
     override func viewDidLoad() {
         super.viewDidLoad()
         observer = NotificationCenter.default.addObserver(forName: .logAppended, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reload() }
+            MainActor.assumeIsolated { self?.scheduleReload() }
         }
         reload()
+    }
+
+    private var reloadScheduled = false
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        reload()   // 重新可见时补一次（隐藏期间的通知被 reload() 的 window 检查挡掉）
+    }
+
+    /// 日志追加通知很密集（命令高频期每秒几十条），每条都全量过滤 + 重建表格会卡主线程。
+    /// 节流到最多 4 次/秒：日志持续不断时也不会像纯防抖那样被饿死（到期必刷一次）。
+    private func scheduleReload() {
+        guard !reloadScheduled else { return }
+        reloadScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.reloadScheduled = false
+                self.reload()
+            }
+        }
     }
 
     @objc private func reload() {
@@ -214,10 +235,10 @@ final class DebugViewController: NSViewController, NSTableViewDataSource, NSTabl
         rawSet.stringValue = set; rawID.stringValue = id; rawPayload.stringValue = payload
         rawRecvType.stringValue = "1"; rawRecvID.stringValue = "0"; rawCmdType.selectItem(at: 0)
     }
-    @objc private func presetPhoto() { preset("2", "0x01", "") }
-    @objc private func presetRecStart() { preset("2", "0x20", "") }
-    @objc private func presetRecStop() { preset("2", "0x21", "") }
-    @objc private func presetMode() { preset("2", "0x02", "01") }
+    @objc private func presetPhoto() { preset("2", "0x01", "01") }
+    @objc private func presetRecStart() { preset("2", "0x02", "01") }
+    @objc private func presetRecStop() { preset("2", "0x02", "00") }
+    @objc private func presetMode() { preset("2", "0xE1", "05") }
 
     @objc private func startRTMP() {
         guard !model.isConnected else { alert("请先断开实时取景连接"); return }

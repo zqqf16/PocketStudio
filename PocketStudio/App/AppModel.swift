@@ -156,11 +156,13 @@ final class AppModel {
         for secret in [activePassword, settings.password] where secret.count >= 4 {
             text = WiFiLogMask.redact(secret, in: text)
         }
-        let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
-        textLog.append("\(f.string(from: Date()))  \(text)")
+        textLog.append("\(Self.logTimeFormatter.string(from: Date()))  \(text)")
         if textLog.count > 1000 { textLog.removeFirst(textLog.count - 1000) }
         NotificationCenter.default.post(name: .logAppended, object: self)
     }
+
+    /// 每行日志都要用；不能每次新建 DateFormatter。
+    private static let logTimeFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f }()
 
     private func periodic() {
         let now = ProcessInfo.processInfo.systemUptime
@@ -510,6 +512,8 @@ final class AppModel {
         do {
             let l = try await openLink()
             setStep(5, .done, String(format: "握手成功，相机 session 0x%04X", l.currentSnapshot().sessionID))
+        } catch is CancellationError {
+            throw CancellationError()   // 取消连接 / teardown：不要包装成「握手失败 + 常见原因」
         } catch {
             throw NSError(domain: "PocketStudio", code: 1, userInfo: [NSLocalizedDescriptionKey:
                 "\(error.localizedDescription)。常见原因：① 电脑或手机上的 DJI Mimo 正占用相机，请彻底退出；② 未允许「本地网络」权限；③ 未连上相机 Wi-Fi；④ 可在设置中切换到「BSD Socket 兼容模式」再试。"])
@@ -547,10 +551,14 @@ final class AppModel {
             linkConnectedAt = ProcessInfo.processInfo.systemUptime
             lastReplyCount = 0; lastReplyCountAt = linkConnectedAt; replyRate = 0
             lastRxPackets = 0; lastVideoPackets = 0
+            lastRateSampleAt = linkConnectedAt; rxRate = 0; videoPacketRate = 0
             monitor.reset()
             return l
         case let .failure(e):
             if link === l { link = nil }
+            // 主动 stop()（取消连接 / teardown / 重建）以 .cancelled 收敛握手：
+            // 对调用方而言这就是「任务被取消」，交给 runConnect / runRecovery 的 CancellationError 分支处理，避免误报连接失败。
+            if e == .cancelled { throw CancellationError() }
             throw NSError(domain: "PocketStudio", code: 1, userInfo: [NSLocalizedDescriptionKey: e.description])
         }
     }
@@ -566,7 +574,11 @@ final class AppModel {
     private var lastReplyCount = 0
     private var lastReplyCountAt = 0.0
     private var replyRate = 0.0
+    /// 「收包 / 视频包」每秒速率的采样基数（每 2s 在 runWatchdog 里更新一次；诊断行只读，
+    /// 不在打印时消费计数——否则看门狗与周期两处调用会打印出不同区间的速率）。
     private var lastRxPackets = 0, lastVideoPackets = 0
+    private var lastRateSampleAt = 0.0
+    private var rxRate = 0.0, videoPacketRate = 0.0
     /// 画面恢复提示（nil = 正常）；LiveViewController 显示在画面上
     private(set) var videoRecoveryMessage: String?
     /// 渲染器状态（LiveViewController 提供；诊断用）
@@ -585,11 +597,18 @@ final class AppModel {
             replyRate = max(0, Double(snap.repliesRx - lastReplyCount) / max(0.001, now - lastReplyCountAt))
             lastReplyCount = snap.repliesRx; lastReplyCountAt = now
         }
+        if now - lastRateSampleAt >= 2 {
+            let dt = max(0.001, now - lastRateSampleAt)
+            rxRate = Double(snap.stats.rxPackets - lastRxPackets) / dt
+            videoPacketRate = Double(snap.stats.videoFrames - lastVideoPackets) / dt
+            lastRxPackets = snap.stats.rxPackets; lastVideoPackets = snap.stats.videoFrames
+            lastRateSampleAt = now
+        }
         handlePlayback(now: now)
         let busy = snap.camera.inPlayback || snap.camera.capturing
         let action = monitor.evaluate(VideoHealthInput(now: now, connectedAt: linkConnectedAt, lastVideoPacket: snap.lastVideoAt,
                                                        lastDecoded: h.lastDecodedAt, lastTelemetry: snap.lastTelemetryAt,
-                                                       lastReply: snap.lastReliableAt, cameraBusy: busy))
+                                                       lastReliablePacket: snap.lastReliableAt, cameraBusy: busy))
         if action != .none { log(diagnosticLine(now: now, tag: "看门狗")) }
         switch action {
         case .none: break
@@ -640,17 +659,15 @@ final class AppModel {
     func diagnosticLine(now: Double = ProcessInfo.processInfo.systemUptime, tag: String = "诊断") -> String {
         let s = snapshot, h = video.health(), v = videoStats
         func age(_ t: Double?) -> String { t.map { String(format: "%.1fs", now - $0) } ?? "从未" }
-        let rx = s.stats.rxPackets - lastRxPackets, vp = s.stats.videoFrames - lastVideoPackets
-        lastRxPackets = s.stats.rxPackets; lastVideoPackets = s.stats.videoFrames
         let types = s.stats.rxTypeCounts.sorted { $0.key < $1.key }.map { "t\($0.key)=\($0.value)" }.joined(separator: ",")
-        return String(format: "[%@] 视频片段 %ld/s · AU %ld/s · 解码 %ld fps · %ld kbps · 最近：视频包 %@ / 解码 %@ / 遥测 %@ / 应答 %@ · 相机应答 %.1f/s · ACK v=%04X%@ r=%04X%@ x=%04X%@ · 握手 %ld 次 · 解码错误 %ld%@ · 解码器重建 %ld · 渲染器 %@ 冲刷 %ld · 等关键帧 %@(丢 %ld) · 关键帧请求 %ld · GOP %ld · 录制排队 %ld · 待解码 %ld · 主线程最大延迟 %.0fms · 收包 %ld（视频 %ld）累计[%@] · 云台 %@ · 保活 %@",
+        return String(format: "[%@] 视频片段 %ld/s · AU %ld/s · 解码 %ld fps · %ld kbps · 最近：视频包 %@ / 解码 %@ / 遥测 %@ / 应答 %@ · 相机应答 %.1f/s · ACK v=%04X%@ r=%04X%@ x=%04X%@ · 握手 %ld 次 · 解码错误 %ld%@ · 解码器重建 %ld · 渲染器 %@ 冲刷 %ld · 等关键帧 %@(丢 %ld) · 关键帧请求 %ld · GOP %ld · 录制排队 %ld · 待解码 %ld · 主线程最大延迟 %.0fms · 收包 %.0f/s（视频 %.0f/s）· 分类累计[%@] · 云台 %@ · 保活 %@",
                       tag, h.rxChunksPerSec, h.ausPerSec, v.fps, v.kbps,
                       age(s.lastVideoAt), age(h.lastDecodedAt), age(s.lastTelemetryAt), age(s.lastReliableAt),
                       replyRate,
                       s.ackVideo, s.ackVideoSeen ? "" : "?", s.ackReliable, s.ackReliableSeen ? "" : "?", s.ackExtra, s.ackExtraSeen ? "" : "(base)",
                       s.handshakeCount, h.decodeErrors, h.lastDecodeError.map { "(\($0))" } ?? "", h.decoderResets,
                       rendererStatus(), h.rendererFlushes, h.waitingKeyframe ? "是" : "否", h.droppedWhileWaiting,
-                      h.keyframeRequests, h.gopFrames, h.recPending, h.pendingIngest, mainLagMax, rx, vp, types,
+                      h.keyframeRequests, h.gopFrames, h.recPending, h.pendingIngest, mainLagMax, rxRate, videoPacketRate, types,
                       s.gimbalReady ? "就绪" : "准备中", settings.linkKeepalive.diagnosticToken)
             + " · 型号 \(deviceProfile.displayName) · 编码 \(video.mediaNotes().codec) · 帧头 \(video.mediaNotes().frameHeader) · UDP \(deviceProfile.udpPort)"
     }
