@@ -156,10 +156,28 @@ final class AppModel {
         for secret in [activePassword, settings.password] where secret.count >= 4 {
             text = WiFiLogMask.redact(secret, in: text)
         }
-        textLog.append("\(Self.logTimeFormatter.string(from: Date()))  \(text)")
+        let line = "\(Self.logTimeFormatter.string(from: Date()))  \(text)"
+        textLog.append(line)
         if textLog.count > 1000 { textLog.removeFirst(textLog.count - 1000) }
+        if let fileLog, let data = (line + "\n").data(using: .utf8) {
+            _ = try? fileLog.seekToEnd()
+            try? fileLog.write(contentsOf: data)
+        }
         NotificationCenter.default.post(name: .logAppended, object: self)
     }
+
+    /// 日志同时写到 `~/Library/Logs/PocketStudio/pocket.log`（每次启动重写）：
+    /// 出问题时直接回传该文件即可，不必在调试页里导出。
+    private let fileLog: FileHandle? = {
+        let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library")
+        let dir = base.appendingPathComponent("Logs/PocketStudio", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("pocket.log")
+        try? FileManager.default.removeItem(at: url)
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        return try? FileHandle(forWritingTo: url)
+    }()
 
     /// 每行日志都要用；不能每次新建 DateFormatter。
     private static let logTimeFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f }()

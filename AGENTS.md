@@ -151,6 +151,11 @@ PocketStudioTests/  CoreProtocolTests、CameraLinkLoopbackTests（本地 UDP 假
 - 自动隐藏：`LiveViewController.pokeChrome()`，NSTrackingArea mouseMoved；3s 后淡出（`chromePinned` 为真时不隐藏），并 `NSCursor.setHiddenUntilMouseMoves`。
   沉浸 / 全屏时红绿灯随之淡出（`MainWindowController.liveChromeChanged`）。
 - `MainWindowController.toggleImmersive`（⌃⌘I）、全屏 `.autoHideToolbar`、`fitWindowToVideo`（⌥⌘0）。
+- **读数宽度不得影响几何（2026-10-15）**：底部状态栏 / 顶部胶囊里的读数（云台角度、fps、kbps、REC 计时…）一变宽，
+  内容区的最小宽度就跟着变 → 分栏把差额甩给侧栏、窗口被 Auto Layout 撑大 → 画面肉眼可见地缩放抖动（实测 视图 901↔907、侧栏 190↔196、窗口 1088↔1098）。
+  规则：**动态文字只允许截断（显示「…」），永不参与最小宽度**——动态标签一律 `.defaultLow` 压缩阻力，
+  容纳它们的 `NSStackView`（状态栏 row、`StatusItem`、顶栏、`ChipView`）一律把 `setClippingResistancePriority(_:for: .horizontal)` 降到 `.defaultHigh`。
+  新增任何「会随时间变宽/变窄」的读数时都要照做。诊断工具：`~/Library/Logs/PocketStudio/pocket.log` 里的 `[几何/…]` 行只在几何真变时出现。
 
 ## 5f. 拖动云台后断线（2026-10-10 14:17 实机日志 1f0f39c2…）
 
@@ -242,11 +247,20 @@ Mimo 2.12.1 符号：`dji_general_get_get_version_config_req`（General:0x4F）�
 15. **把 General:0x4F 当成视频心跳**：原 Python `start_video()` 注释写「Mimo VPN 抓包里的 5Hz 视频心跳」，但同一函数的启动三步只有 0x88 + 0x81 + 0x82，0x4F 只在随后的循环里。dji-firmware-tools 把它命名为 Get Cfg File；DUMLrub `cmd_common_get_cfg_file` 的负载就是 `type u8 + offset u32le + length u32le`。本应用的 `01 00 XX 00 00 ff ff ff ff` 即 type=1、length=0xFFFFFFFF，计数器写在 offset 的第 2 字节。实机每次应答约 265 字节 XML，把可靠窗口占满后相机停止应答命令（§5b、§5d）。OPC 把画面寿命归因于 0x88/0x81 注册。默认停止 0x4F（启动时也不发一次），改发 General:0x0E 1Hz。设置可切回旧版做 A/B。停发之后画面能否单靠 0x88 维持，尚未实机确认。
 16. **Pocket 3 实机画面全是 -12909**：`DJILiveViewDeframer` 把 Annex-B 里的 `00 00 01 ff`（起始码，或 `00 00 00 01` 错一位）加上任意像样的小端长度当成 16 字节帧头，从中间删掉一段 NAL。诊断行会写「帧头 00 00 01 ff」，同时 AU 仍有 ~30/s、解码停在几十秒前。修复：Pocket 3 / 未识别机型不启用剥离；启用时也要等下一帧头证明长度。GOP 缓存在连续解码错误或超过 900 帧 / 48MB 时清空。
 17. **取消连接后 `connectTask` 永久悬挂**：`CameraLink.stop()` 把 `handshakeCompletion` 置 nil 却不 resume，还先取消了 10s 超时定时器 → `AppModel.openLink` 的 `withCheckedContinuation` 在「握手进行中取消连接 / teardown / 重建」时永不返回（任务泄漏；`withCheckedContinuation` 不响应 Task 取消）。修复：`stop()` 以 `.cancelled` 收敛（`LinkError` 新增该 case 并 Equatable），`openLink` 映射为 `CancellationError`，`udpStep` 放行不包装；回归测试 `testStopDuringHandshakeResumesCancelled`。同轮：`toggleRecording` 改走统一 300ms 限速；`installStopHooks` 的 6 个停止钩子改为随 `viewWillDisappear` 移除（此前每次回到实时页都追加、侧栏来回切换后同一事件触发 N 次）；`AppSettings.password` 内存缓存（`log()` 每行都要读它打码）；Debug 页日志刷新节流 0.25s。
+18. **「整幅画面在放大缩小」= 状态栏读数把分栏/窗口顶动（2026-10-15 实机）**：连接后 19:18:56–19:19:26 日志里 侧栏 190↔196、live 视图 901↔907、窗口 1088↔1098 连续抖动，断开立刻停。根因不是解码、不是 `fitWindowToVideo`、不是窗口管理器：
+    底部状态栏的内容宽度**本身变成了内容区的最小宽度**——`StatusBarView` 的 row、`StatusItem` 都是 `NSStackView`，默认 `clippingResistancePriority = .required`，
+    标签的压缩阻力又是 `.defaultHigh(750)`，于是「航向 0.0° 俯仰 0.0°」↔「航向 -113.4° 俯仰 42.9° · 跟随」这种几点的宽度差一路顶到 `NSSplitViewItem` 与 `NSWindow`：
+    侧栏被挤到最小后窗口就被 Auto Layout 撑大 10 点，画面随之等比缩放（`resizeAspect`）＋横移 3 点，看起来就是「周期性放大缩小」。
+    本机复现（`POCKETSTUDIO_UI_CHURN` 注入 10Hz 刷新 + 人造长文本）：修复关 → 窗口 1088→1212；修复开 → 窗口/视图/侧栏恒定、文字显示「…」。
+    修复：row / `StatusItem` / 顶栏 / `ChipView` 的 `setClippingResistancePriority(_:for: .horizontal)` 由默认 `.required` 降到 `.defaultHigh`，读数标签的压缩阻力降到 `.defaultLow`；状态栏间距 18→14。
+    诊断：`[几何/…]`（`MainWindowController.installGeometryDiagnostics` + `LiveViewController.logGeometryIfChanged`）只在几何真变时记一行，稳定连接时不该出现。
 
 ## 9. 已验证 / 未验证
 
 - **已验证（Linux，Swift 6.2.3 编译 + 单测）**：CRC、DUML、UDP 头/握手/ACK/命令包与 Python 逐字节一致；状态解析；BLE 帧与识别；H.264 Annex-B 拆分与访问单元组装；HEVC 参数集识别、IRAP 16–21 关键帧；`00 00 01 ff` 只有在下一帧头对齐时才剥离，Pocket 3 形态的 Annex-B（含起始码和片内 `00 00 01 ff`）原样通过；机型识别（0x20/0x21/0x22、广播名、Xtra 端口 10004）；模式表（Pocket 3 拍照 05，4P 拍照 0x17 / 实况 0x4D，Pocket 4 复用 Pocket 3）；4/4P 不把 0x80/0xDC 当成 SD 容量；默认保活发 General:0x0E、不发 0x4F，旧版可切回；关键帧同时发 0x09/0xA8 与 Camera:0xB3；`CameraLink` 与本地假相机的完整回环（握手、ACK、心跳、视频、注册、拍照、云台；动态端口）；云台轴映射 / 停止 / 看门狗；握手中途 stop 以 `.cancelled` 收敛（防续体悬挂）、用户命令 ≥300ms 限速（假相机记录到达时刻）。Wi-Fi：`[status][len][utf8]` 解析、0xE4、非法 UTF-8 视为不可读、读取状态机（3 次 / 20 秒、广播名回退、加密即停、写间隔 200ms）、手动/缓存选择、扫描重试 90 秒、密码打码。这些是纯逻辑测试，没有相机。
 - **实机已确认（用户反馈）**：应用可在真实 Pocket 3 上构建运行；云台轴顺序 `[pitch, roll, yaw]`。Pocket 4 / 4P **没有**用本应用实机确认。
+- **本机已验证（无需相机，注入 10Hz 刷新 + 人造长文本）**：状态栏 / 顶栏读数变宽不再改变窗口、分栏、画面视图尺寸（修复前窗口被撑大 124 点、视图跟着缩放；修复后窗口 / 视图 / 侧栏恒定、文字显示「…」）。
+  §8 第 18 条那个「画面放大缩小」待用户带相机再确认一次。
 - **依据第三方实机抓包（OpenPocketCine）但本应用尚未实机复测**：相机快门/录像/模式命令、云台回中/模式/翻转/转速、0x03/0xDA 初始化、0x80/0x05 新解析、GOP 缓存录制；Pocket 4/4P 的型号字节 0x21/0x22、PIN `osmo`、HEVC 预览、16 字节帧头、4P 拍照 0x17 / 实况 0x4D / 慢动作 0x00、Xtra UDP 10004。SuperPhoto（`0x02/0x12`，快门 `0F`）只记在常量里，**不发送**。
 - **未在 Linux 编译、仅人工审阅**：所有 `Platform/`、`App/`、`Views/` 文件（用户已在 Xcode 26 编译通过的版本之后的改动：云台 UI 停止钩子、`LocalNetworkPermission`）。
 - **未实机验证**：云台方向正负（反转开关默认关）；roll 字段（@2，OPC 用四元数求）；BLE RTMP 直播流程；CoreWLAN 自动加入在各系统版本上的表现；本地网络授权检测（拒绝码 -65570 的实际触发）；MP4 录制的时间戳与 QuickTime 兼容性（2026-10-15 起 `makeSampleBuffer` 的 sample duration 由写死的 1/60 改为 `.invalid`，由 AVAssetWriter 按 PTS 差值推断——请实机录一段确认）。

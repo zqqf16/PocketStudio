@@ -63,8 +63,36 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         observer = NotificationCenter.default.addObserver(forName: .modelChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateToolbar() }
         }
+        installGeometryDiagnostics(w)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    // MARK: 几何诊断（排查「画面放大缩小 / 窗口尺寸自己在变」）
+    //
+    // 只在这些事件真发生时记一行，便于用户在实机上判断「几何有没有被内容顶动」：
+    // 正常情况（状态栏读数在变）不应出现 几何/分栏 或 几何/窗口尺寸 行。
+    private var geoObservers: [NSObjectProtocol] = []
+    private func installGeometryDiagnostics(_ w: NSWindow) {
+        let nc = NotificationCenter.default
+        func watch(_ name: Notification.Name, _ object: Any?, _ tag: String) {
+            geoObservers.append(nc.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let w = self.window else { return }
+                    let side: String = {
+                        guard let item = self.split.splitViewItems.first else { return "?" }
+                        return item.isCollapsed ? "收" : String(format: "%.0f", item.viewController.view.frame.width)
+                    }()
+                    self.model.log(String(format: "[几何/%@] 窗口 %.0f×%.0f · 侧栏 %@",
+                                          tag, w.frame.width, w.frame.height, side))
+                }
+            })
+        }
+        watch(NSWindow.didResizeNotification, w, "窗口尺寸")
+        watch(NSWindow.didMoveNotification, w, "窗口移动")
+        watch(NSWindow.didEnterFullScreenNotification, w, "进入全屏")
+        watch(NSWindow.didExitFullScreenNotification, w, "退出全屏")
+        watch(NSSplitView.didResizeSubviewsNotification, split.splitView, "分栏")
+    }
 
     func select(_ s: Section) { sidebar.select(s); content.show(s); updateToolbar() }
 
@@ -141,6 +169,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
     /// 沉浸模式（⌃⌘I）：收起侧边栏、隐藏工具栏与标题，画面全出血；控件随鼠标淡入淡出
     @objc func toggleImmersive(_ sender: Any?) {
         immersive.toggle()
+        model.log(immersive ? "沉浸模式：开（收起侧栏、隐藏工具栏与标题）" : "沉浸模式：关（恢复侧栏与工具栏）")
         if immersive { select(.live) }
         sidebarItem?.animator().isCollapsed = immersive
         window?.toolbar?.isVisible = !immersive

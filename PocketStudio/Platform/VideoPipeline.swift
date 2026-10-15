@@ -63,6 +63,8 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
     private var _codec: VideoCodec?
     private var _frameHeader = "未检查"
     private var _lastPixelBuffer: CVPixelBuffer?
+    // ⚠️ 临时诊断（排查「画面周期性放大缩小」）：显示样本的像素缓冲尺寸 = AVSampleBufferDisplayLayer 等比适配的依据
+    private var _displayW = 0, _displayH = 0
     private var _recordInfo: (Date, Int)?
     private var _recordingActive = false
     private var pendingIngest = 0                      // 已投递未处理的片段数（锁保护）
@@ -86,10 +88,19 @@ nonisolated final class VideoPipeline: @unchecked Sendable {
             self.consecutiveErrors = 0
             self.frameTimes.append(now)
             self.frameTimes.removeAll { now - $0 > 1 }
-            self.lock.withLock {
+            let dw = CVPixelBufferGetWidth(pb), dh = CVPixelBufferGetHeight(pb)
+            let dimsChanged: Bool = self.lock.withLock {
                 self._lastPixelBuffer = pb
                 self._health.lastDecodedAt = now
                 self._stats.frames += 1
+                if self._displayW != dw || self._displayH != dh {
+                    self._displayW = dw; self._displayH = dh
+                    return true
+                }
+                return false
+            }
+            if dimsChanged {
+                self.onNote?(String(format: "显示样本尺寸 %d×%d（显示层按它做等比适配）", dw, dh))
             }
             if let sb = DisplaySample.make(pb, pts: pts) { self.onDisplaySample?(sb) }
         }

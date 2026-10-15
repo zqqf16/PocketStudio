@@ -189,6 +189,48 @@ final class LiveViewController: NSViewController {
     }
     private var lastDims = (0, 0)
 
+    // MARK: 几何诊断（排查「画面放大缩小 / 窗口尺寸自己在变」）
+
+    private var lastGeoLine: String?
+    private var lastGeoLogAt: Double = 0
+    /// 只在几何变化时记一行：窗口、内容视图、画面视图、显示图层、布局区、安全区、侧栏、全屏、渲染器。
+    /// 用途：区分「窗口被改尺寸」「分栏被改尺寸」「画面视图/图层自己变了」「只是渲染器变了」。
+    /// 图层另记「呈现值」：模型值不变但呈现值在动 = 有隐式动画在跑（视觉上就是画面在缩放）。
+    private func logGeometryIfChanged(_ why: String) {
+        guard let w = view.window else { return }
+        let vf = videoView.frame
+        let lb = videoView.displayLayer.bounds
+        let pres = videoView.displayLayer.presentation().map { "\(Int($0.bounds.width))×\(Int($0.bounds.height))" } ?? "—"
+        let v = view.bounds
+        let ins = view.safeAreaInsets
+        let side: String = {
+            guard let c = w.windowController as? MainWindowController, let item = c.split.splitViewItems.first else { return "?" }
+            return item.isCollapsed ? "收" : String(format: "%.0f", item.viewController.view.frame.width)
+        }()
+        let line = "窗口 \(Int(w.frame.width))×\(Int(w.frame.height))"
+            + " · 视图 \(Int(v.width))×\(Int(v.height))"
+            + " · 画面 \(Int(vf.width))×\(Int(vf.height))@\(Int(vf.minX)),\(Int(vf.minY))"
+            + " · 图层 \(Int(lb.width))×\(Int(lb.height))@\(Int(lb.origin.x)),\(Int(lb.origin.y))"
+            + " · 呈现 \(pres)"
+            + " · 布局区 \(Int(w.contentLayoutRect.width))×\(Int(w.contentLayoutRect.height))"
+            + " · 安全区 \(Int(ins.top))/\(Int(ins.bottom))"
+            + " · 侧栏 \(side)"
+            + " · 全屏 \(w.styleMask.contains(.fullScreen) ? 1 : 0)"
+            + " · 解码 \(model.videoStats.width)×\(model.videoStats.height)"
+            + " · 渲染器 \(videoView.rendererStatusText)"
+        guard line != lastGeoLine else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastGeoLogAt >= 0.2 else { return }   // 变化密集时最多 5 Hz，避免日志被刷掉
+        lastGeoLine = line
+        lastGeoLogAt = now
+        model.log("[几何/\(why)] \(line)")
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        logGeometryIfChanged("布局")
+    }
+
     private func buildPlaceholder() {
         let icon = NSImageView(image: UI.symbol("camera.aperture", size: 56, weight: .thin) ?? NSImage())
         icon.contentTintColor = NSColor.white.withAlphaComponent(0.8)
@@ -226,6 +268,8 @@ final class LiveViewController: NSViewController {
         ])
         for l in [recBadge, modeLabel, localRecLabel] { l.textColor = .white; l.shadow = Self.textShadow }
         let row = UI.hstack([dot, recBadge, modeLabel, localRecLabel], spacing: 8)
+        // 同状态栏：顶部读数（待机 / REC 计时 / Mac 录制进度）只允许截断，不允许把宽度顶给分栏与窗口
+        row.setClippingResistancePriority(.defaultHigh, for: .horizontal)
         row.appearance = NSAppearance(named: .darkAqua)
         hud = row
         view.addSubview(hud)
@@ -477,6 +521,7 @@ final class LiveViewController: NSViewController {
         \(cam.summary)
         """
         statusBar.update(model: model)
+        logGeometryIfChanged("刷新")
     }
 
     // MARK: Keyboard / trackpad
@@ -662,7 +707,7 @@ final class LiveViewController: NSViewController {
 
     // MARK: Actions
 
-    func toggleOverlays() { overlaysVisible.toggle(); refresh() }
+    func toggleOverlays() { overlaysVisible.toggle(); model.log("悬浮控件：\(overlaysVisible ? "显示" : "隐藏")"); refresh() }
     var areOverlaysVisible: Bool { overlaysVisible }
     func toggleVideo() { videoHidden.toggle(); videoView.isHidden = videoHidden; model.log(videoHidden ? "画面已隐藏 (V)" : "画面已显示 (V)") }
 
@@ -708,7 +753,12 @@ final class StatusBarView: NSView {
         super.init(frame: frame)
         translatesAutoresizingMaskIntoConstraints = false
         let spacer = NSView(); spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let row = UI.hstack([conn, battery, sd, mode, rec, spacer, gimbal, video], spacing: 18)
+        let row = UI.hstack([conn, battery, sd, mode, rec, spacer, gimbal, video], spacing: 14)
+        // 状态栏的内容宽度**绝不能**变成「内容区 / 窗口」的最小宽度：
+        //   NSStackView 默认 clipping resistance = required，会让「文字排满的自然宽度」一路顶到分栏与窗口，
+        //   读数一变宽（云台角度正负号 / 位数、fps / kbps 位数…）窗口与分栏就跟着变 → 画面缩放抖动。
+        //   这里：栈视图 defaultHigh + 文字 defaultLow = 空间不够时先把文字截断成「…」，几何保持不变。
+        row.setClippingResistancePriority(.defaultHigh, for: .horizontal)
         // 置于底部渐变遮罩上，不再单独加玻璃底板
         row.shadow = LiveViewController.textShadow
         addSubview(row)
@@ -763,6 +813,9 @@ final class StatusItem: NSStackView {
         setSymbol(symbol)
         addArrangedSubview(icon); addArrangedSubview(text)
         text.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        // 同 StatusBarView：读数只允许被截断（显示「…」），不允许把宽度要求传给上层布局
+        setClippingResistancePriority(.defaultHigh, for: .horizontal)
+        text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
     required init?(coder: NSCoder) { fatalError() }
     func setSymbol(_ s: String) { icon.image = UI.symbol(s, size: 12) }

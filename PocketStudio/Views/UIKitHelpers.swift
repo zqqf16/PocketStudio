@@ -264,6 +264,8 @@ final class ChipView: NSView {
         label.lineBreakMode = .byTruncatingTail
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let s = UI.hstack([icon, label], spacing: 5)
+        // 胶囊里的文字（REC 计时 / 模式名 / 录制进度）只允许截断，不允许把宽度顶给分栏与窗口
+        s.setClippingResistancePriority(.defaultHigh, for: .horizontal)
         addSubview(s)
         NSLayoutConstraint.activate([
             s.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9), s.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
